@@ -25,7 +25,7 @@ namespace oxygen
         setupSlider(ceilingSlider, ceilingAttachment, "Ceiling");
         setupSlider(releaseSlider, releaseAttachment, "Release");
 
-        setSize(300, 200);
+        setSize(300, 130);
     }
 
     MaximizerEditor::~MaximizerEditor()

@@ -16,6 +16,8 @@ public:
     void resized() override;
     void timerCallback() override;
     
+    void drawMeterValue(juce::Graphics& g, float level, int x, int y, int w);
+    
 private:
     OxygenAudioProcessor& audioProcessor;
     

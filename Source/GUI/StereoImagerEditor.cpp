@@ -32,7 +32,7 @@ namespace oxygen
         // The plan mentioned "Audit Multiband/Imager Summing Logic" but for GUI, simple is better.
         // Let's allow Xovers since Multiband has them.
         
-        setSize(400, 200);
+        setSize(400, 130);
     }
 
     StereoImagerEditor::~StereoImagerEditor()

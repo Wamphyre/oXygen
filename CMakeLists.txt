@@ -7,11 +7,22 @@ project(oXygen VERSION 0.0.1)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# General optimization flags
-if (MSVC)
+# System Detection & Optimization Flags
+if(APPLE)
+    message(STATUS "🍏 Detected System: macOS")
+    # macOS Specific Optimizations
+    add_compile_options(-O3 -ffast-math -march=native -funroll-loops -flto)
+    
+elseif(MSVC)
+    message(STATUS "🪟 Detected System: Windows (MSVC)")
+    # Windows/MSVC Specific Optimizations
     add_compile_options(/MP /W4 /permissive- /O2 /Oi /Ot /GF /Gy /arch:AVX2)
-else()
+    
+elseif(UNIX AND NOT APPLE)
+    message(STATUS "🐧 Detected System: Linux/Unix")
+    # Linux Specific Optimizations
     add_compile_options(-O3 -ffast-math -march=native)
+    
 endif()
 
 # Enable LTO (Interprocedural Optimization)
@@ -37,17 +48,18 @@ endif()
 
 # Create the plugin target
 juce_add_plugin(oXygen
-    COMPANY_NAME "OpenSourceAudio"
+    COMPANY_NAME "Wamphyre"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE
-    PLUGIN_MANUFACTURER_CODE "OsAy"
+    PLUGIN_MANUFACTURER_CODE "Wamp"
     PLUGIN_CODE "Oxyg"
-    FORMATS VST3 # Removed Standalone
+    FORMATS VST3
     PRODUCT_NAME "oXygen"
+
 )
 
 # Add source files
@@ -110,11 +122,11 @@ target_compile_definitions(oXygen
 # Generate JuceHeader.h for classic JUCE project compatibility
 juce_generate_juce_header(oXygen)
 
-# Custom command to copy VST3 to releases folder after build
-if(TARGET oXygen_VST3)
-    add_custom_command(TARGET oXygen_VST3 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/releases"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:oXygen_VST3>/../../" "${CMAKE_SOURCE_DIR}/releases/oXygen.vst3"
-        COMMENT "Copying VST3 artifact to ${CMAKE_SOURCE_DIR}/releases/oXygen.vst3"
-    )
-endif()
+# Custom command to copy artifacts to releases folder after build
+add_custom_command(TARGET oXygen_VST3 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/releases"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:oXygen_VST3>/../../" "${CMAKE_SOURCE_DIR}/releases/oXygen.vst3"
+    COMMENT "Copying VST3 artifact to releases/oXygen.vst3"
+)
+
+

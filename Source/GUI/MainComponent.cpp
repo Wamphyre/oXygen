@@ -42,7 +42,7 @@ MainComponent::MainComponent(OxygenAudioProcessor& p)
     aiMasterButton->onClick = [this] { audioProcessor.triggerAutoMastering(); };
     addAndMakeVisible(aiMasterButton.get());
     
-    setSize(1000, 700); // Increased default size
+    setSize(1100, 1000); // Increased default size for better visibility
     startTimerHz(60);   // Smoother 60fps update
 }
 
@@ -69,25 +69,29 @@ void MainComponent::resized()
     // AI Button
     if (aiMasterButton.get()) // Fix unique_ptr check
     {
-        auto buttonArea = headerArea.removeFromRight(120).reduced(10);
+        // Increased button size for better visibility
+        auto buttonArea = headerArea.removeFromRight(180).reduced(5);
         aiMasterButton->setBounds(buttonArea);
     }
     
-    // Spectrum Analyzer (Top 150px - Compact per user request)
-    auto visualizerArea = area.removeFromTop(150).reduced(10, 5);
+    // Spectrum Analyzer (Top 120px - Slightly more compact)
+    auto visualizerArea = area.removeFromTop(120).reduced(10, 5);
     spectrumAnalyzer.setBounds(visualizerArea);
     
     // Meters Sidebar (Left/Right) - Adjusted to fit new layout
-    auto leftSidebar = area.removeFromLeft(50);
-    auto rightSidebar = area.removeFromRight(50);
+    auto leftSidebar = area.removeFromLeft(70);
+    auto rightSidebar = area.removeFromRight(70);
     
     // Segmented Meters (Left)
-    inputMeterL.setBounds(leftSidebar.removeFromLeft(20).reduced(2, 0));
-    inputMeterR.setBounds(leftSidebar.reduced(2, 0));
+    // Reserve bottom 20px for text
+    auto leftMetersArea = leftSidebar.removeFromTop(leftSidebar.getHeight() - 25);
+    inputMeterL.setBounds(leftMetersArea.removeFromLeft(35).reduced(2, 0));
+    inputMeterR.setBounds(leftMetersArea.reduced(2, 0));
     
     // Segmented Meters (Right)
-    outputMeterL.setBounds(rightSidebar.removeFromLeft(20).reduced(2, 0));
-    outputMeterR.setBounds(rightSidebar.reduced(2, 0));
+    auto rightMetersArea = rightSidebar.removeFromTop(rightSidebar.getHeight() - 25);
+    outputMeterL.setBounds(rightMetersArea.removeFromLeft(35).reduced(2, 0));
+    outputMeterR.setBounds(rightMetersArea.reduced(2, 0));
     
     // Module Rack (Remaining center area)
     moduleRack->setBounds(area.reduced(5));
@@ -105,17 +109,19 @@ void MainComponent::paint(juce::Graphics& g)
     // Logo / Branding (SVG)
     if (logoDrawable)
     {
-        auto headerArea = getLocalBounds().removeFromTop(60).reduced(20, 10).toFloat();
+        // Increased logo size: minimal reduction
+        auto headerArea = getLocalBounds().removeFromTop(60).reduced(10, 5).toFloat();
         auto logoHeight = headerArea.getHeight();
-        auto logoWidth = logoHeight * (800.0f / 300.0f);
+        auto logoWidth = logoHeight * (800.0f / 300.0f); // Maintain aspect ratio
         
-        logoDrawable->drawWithin(g, juce::Rectangle<float>(headerArea.getX(), headerArea.getY(), logoWidth, logoHeight),
+        logoDrawable->drawWithin(g, juce::Rectangle<float>(headerArea.getX(), headerArea.getY(), logoWidth * 1.5f, logoHeight * 1.5f),
                                  juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, 1.0f);
     }
     else
     {
         g.setColour(oxygen::Theme::Colors::OnSurface);
-        g.setFont(oxygen::Theme::Fonts::getHeading().withHeight(32.0f));
+        // Larger font for fallback text
+        g.setFont(oxygen::Theme::Fonts::getHeading().withHeight(40.0f));
         g.drawText("oXygen", getLocalBounds().removeFromTop(60).reduced(20, 0), juce::Justification::left, true);
     }
     
@@ -145,4 +151,20 @@ void MainComponent::paint(juce::Graphics& g)
                  g.drawHorizontalLine((int)(visBounds.getY() + normY * visBounds.getHeight()), visBounds.getX(), visBounds.getRight());
         }
     }
+
+    // Draw Meter Text Values
+    drawMeterValue(g, audioProcessor.getInputLevel(), inputMeterL.getX(), inputMeterL.getBottom() + 5, inputMeterL.getWidth() * 2 + 10);
+    drawMeterValue(g, audioProcessor.getOutputLevel(), outputMeterL.getX(), outputMeterL.getBottom() + 5, outputMeterL.getWidth() * 2 + 10);
+}
+
+void MainComponent::drawMeterValue(juce::Graphics& g, float level, int x, int y, int w)
+{
+    g.setColour(oxygen::Theme::Colors::OnSurfaceVariant);
+    g.setFont(oxygen::Theme::Fonts::getBody().withHeight(12.0f));
+    
+    float db = juce::Decibels::gainToDecibels(level);
+    juce::String text = (db < -60.0f) ? "-inf" : juce::String(db, 1) + " dB";
+    
+    // Center text below the stereo pair
+    g.drawText(text, x, y, w, 20, juce::Justification::centred, false);
 }

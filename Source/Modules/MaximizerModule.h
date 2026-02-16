@@ -27,6 +27,7 @@ namespace oxygen
         juce::dsp::Limiter<float> limiter;
         
         float lastThreshold = -100.0f, lastRelease = -1.0f, lastCeiling = -100.0f;
+        float currentMakeupGain = 1.0f;
         
         void updateParameters();
 

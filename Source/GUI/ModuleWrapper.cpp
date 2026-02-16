@@ -89,10 +89,10 @@ namespace oxygen
         auto bounds = getLocalBounds();
         auto headerArea = bounds.removeFromTop(headerHeight);
         
-        collapseButton.setBounds(headerArea.removeFromRight(30).reduced(5));
-        downButton.setBounds(headerArea.removeFromRight(30).reduced(5));
-        upButton.setBounds(headerArea.removeFromRight(30).reduced(5));
-        bypassButton.setBounds(headerArea.removeFromRight(30).reduced(5));
+        collapseButton.setBounds(headerArea.removeFromRight(40).reduced(5));
+        downButton.setBounds(headerArea.removeFromRight(40).reduced(5));
+        upButton.setBounds(headerArea.removeFromRight(40).reduced(5));
+        bypassButton.setBounds(headerArea.removeFromRight(40).reduced(5));
         
         if (moduleEditor != nullptr && !collapsed)
         {

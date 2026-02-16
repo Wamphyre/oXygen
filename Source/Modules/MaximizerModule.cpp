@@ -50,7 +50,37 @@ namespace oxygen
         
         juce::dsp::AudioBlock<float> block(buffer);
         juce::dsp::ProcessContextReplacing<float> context(block);
+
+        // 1. Soft Clip / Saturation (Ozone-like "Tube" or "IRC" emulation)
+        // Adds harmonics and reduces peakiness before the hard wall limiter
+        // This allows for louder perceived volume.
+        const int numChannels = buffer.getNumChannels();
+        const int numSamples = buffer.getNumSamples();
+        
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto* data = buffer.getWritePointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                // Simple Tanh Soft Clipper with slight drive
+                // data[i] = std::tanh(data[i]); 
+                // We can be more sophisticated:
+                float x = data[i];
+                if (x < -1.5f) x = -1.5f;
+                else if (x > 1.5f) x = 1.5f;
+                
+                // Soft knee
+                // Polynomial or Tanh. Tanh is classic.
+                data[i] = std::tanh(x); 
+            }
+        }
+
+        // 2. Hard Limiting
         limiter.process(context);
+        
+        // 3. Apply Make-up Gain (Ceiling)
+        // Optimization: Use vector op
+        buffer.applyGain(currentMakeupGain);
     }
     
     void MaximizerModule::updateParameters()

@@ -1,93 +1,130 @@
 # oXygen Mastering Suite
 
-![oXygen Logo](oxygen_logo.svg)
+**oXygen** is a free and open-source professional mastering suite built with C++ and the JUCE framework. Designed for high fidelity and flexibility, it features AI-assisted automatic mastering functions, a modern Material Design 3 interface, a powerful 16-band graphic equalizer, and a suite of multiband dynamics processors.
 
-**oXygen** is a professional, modular mastering plugin suite built with C++ and the JUCE framework. Designed for high fidelity and flexibility, it features a modern Material Design 3 interface, a powerful 16-band graphic equalizer, and a suite of multiband dynamics processors.
+![Version](https://img.shields.io/badge/version-0.0.1-alpha)
+![Platform](https://img.shields.io/badge/platform-Windows-blue)
+![Platform](https://img.shields.io/badge/platform-macOS-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+[![ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Me-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wamphyre94078)
 
----
+![oXygen Logo](assets/oxygen_logo.svg)
 
-## 🚀 Features
+## Features
 
-### 🎛️ Audio Processing Modules
-The plugin uses a flexible `AudioProcessorGraph` architecture, allowing for robust internal routing and mono/stereo compatibility.
+### Core Functionality
+- **AI-Assisted Mastering**: Automatically analyzes your track's loudness and tonal balance.
+- **Smart Suggestions**: Provides target settings for gain and EQ to achieve a balanced, commercial-grade master.
+- **16-Band Graphic Equalizer**: Precision control ranging from 30Hz to 25kHz with high-quality Peak filters.
+- **Multiband Compressor**: 4 independent bands (Low, Low-Mid, High-Mid, High) with Linkwitz-Riley crossovers.
+- **Stereo Imager**: Multiband width adjustment with mono compatibility safe for the low end.
+- **Maximizer**: Transparent limiting to catch peaks without crushing dynamics.
+- **Gain**: Simple, transparent input/output gain staging.
 
-1.  **16-Band Graphic Equalizer**
-    *   **Precision Control**: 16 bands ranging from 30Hz to 25kHz.
-    *   **Pro-Grade Filters**: High-quality Peak filters with +/- 12dB gain range.
-    *   **Modern Interface**: Clean vertical sliders for intuitive frequency shaping.
+### Audio Engine
+- **Modular Architecture**: Built on `juce::AudioProcessorGraph` for robust internal routing.
+- **Linkwitz-Riley Crossovers**: Transparent frequency splitting (24dB/oct).
+- **NaN/Silence Protection**: Optimized DSP processing with safety checks.
+- **Auto-Detect**: Adjusts to Mono/Stereo configurations for DAW compatibility.
 
-2.  **Multiband Compressor**
-    *   **4 Independent Bands**: Low, Low-Mid, High-Mid, High.
-    *   **Linkwitz-Riley Crossovers**: Transparent frequency splitting (24dB/oct).
-    *   **Full Parametric Control**: Threshold, Ratio, Attack, Release, and Gain per band.
-    *   **Safety**: Automatic gain handling and silence protection.
+### Modern GUI (Material Design 3)
+- **Vector Graphics**: Fully scalable SVG-based interface.
+- **Theme Engine**: Centralized color and typography management.
+- **Custom Fonts**: **Outfit** (Headings) and **Unbounded** (Body) for a clean, futuristic look.
 
-3.  **Stereo Imager**
-    *   **Multiband Width**: Adjust stereo width independently for 4 frequency bands.
-    *   **Mono Compatibility**: Safe widening without phase cancellation artifacts in the low end.
+## System Requirements
 
-4.  **Maximizer**
-    *   **Transparent Limiting**: Catch peaks without crushing dynamics.
-    *   **Controls**: Threshold, Ceiling, and Release for final loudness optimization.
+### macOS
+- **OS**: macOS 10.13 or later
+- **Format**: VST3, AU
+- **Univeral**: Intel and Apple Silicon support
 
-5.  **Gain**: Simple, transparent input/output gain staging.
+### Windows
+- **OS**: Windows 10 or 11 (64-bit)
+- **Format**: VST3
 
-### 🎨 Modern GUI (Material Design 3)
-*   **Vector Graphics**: Fully scalable SVG-based interface (Logo, Icons).
-*   **Theme Engine**: Centralized `Theme.h` managing colors (Surface, Primary, OnSurface) and typography.
-*   **Custom Fonts**: Uses **Outfit** (Headings) and **Unbounded** (Body) for a futuristic, clean look.
-*   **Consistent Styling**: Uniform controls across all modules via custom `ModuleWrapper` and Editors.
+## 📦 Build from Source
 
-### 🛠️ Technical Highlights
-*   **Modular Architecture**: Built on `juce::AudioProcessorGraph` for complex signal routing.
-*   **Robust Audio Engine**: Auto-detects Mono/Stereo configurations to ensure compatibility with all DAWs (Reaper, Ableton, FL Studio, etc.).
-*   **Performance**: Optimized DSP processing with safety checks for NaN/Silence.
-*   **Assets**: embedded binary assets for single-file portability.
+### 🍎 macOS
 
----
-
-## 📦 Building from Source
-
-### Prerequisites
-*   **Windows 10/11** (Tested environment)
-*   **Visual Studio 2022** (with C++ Desktop Development workload)
-*   **CMake 3.20+**
+#### Dependencies
+*   **Xcode Command Line Tools** (install via `xcode-select --install`)
+*   **CMake 3.20+** (install via `brew install cmake`)
 *   **Git**
 
-### Step-by-Step Build Instructions
-
+#### Build Steps
 1.  **Clone the Repository**
     ```bash
-    git clone https://github.com/yourusername/oXygen.git
+    git clone https://github.com/Wamphyre/oXygen.git
     cd oXygen
     ```
 
-2.  **Configure with CMake**
-    This will automatically download JUCE (if not present) and generate the Visual Studio solution.
+2.  **Build**
+    We provide a script to automate the configuration and build process:
     ```bash
-    cmake -B build
+    ./build.sh
     ```
-
-3.  **Build the Plugin**
-    Compile in Release mode for optimized performance.
+    Alternatively, you can build manually:
     ```bash
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build --config Release
     ```
 
-4.  **Locate Artifacts**
-    The compiled VST3 plugin will be available at:
-    `build/oXygen_artefacts/Release/VST3/oXygen.vst3`
+3.  **Artifacts**
+    The compiled plugin (VST3) will be located in:
+    `releases/`
 
 ---
 
-## 🧪 Testing & Verification
-We use a custom test suite to verify audio integrity:
-*   **Signal Chain Verification**: Ensures audio passes through all modules without dropping to silence.
-*   **Mono/Stereo Check**: Validates behavior when tracks are mono or stereo.
-*   **Visual Verification**: GUI renders correctly at various scaling factors.
+### 🪟 Windows
 
-## 📜 License
-Proprietary Mastering Suite. Created for advanced audio engineering workflows.
+#### Dependencies
+*   **Select "Desktop development with C++"** during installation.
+*   **CMake 3.20+** (often included with VS, or install separately)
+*   **Git**
+
+#### Build Steps
+1.  **Clone the Repository**
+    Open PowerShell or Git Bash and run:
+    ```powershell
+    git clone https://github.com/Wamphyre/oXygen.git
+    cd oXygen
+    ```
+
+2.  **Configure**
+    This will automatically download the JUCE framework (if not present) and generate the Visual Studio solution.
+    ```powershell
+    cmake -B build
+    ```
+
+3.  **Build**
+    Compile in Release mode for optimized performance.
+    ```powershell
+    cmake --build build --config Release
+    ```
+
+4.  **Artifacts**
+    The plugin is automatically copied to the `releases/` folder:
+    `releases/oXygen.vst3`
+
+## Usage
+
+### AI Mastering
+1.  **Insert oXygen** on your master bus.
+2.  **Play audio** through the plugin.
+3.  **Analyze**: Let the AI listen to your track to suggest optimal settings.
+
+### Manual Control
+-   **EQ**: Adjust the 16 bands to shape the tonal balance.
+-   **Dynamics**: Use the multiband compressor to control levels across frequency ranges.
+-   **Width**: Use the Stereo Imager to widen the mix (avoid widening low frequencies).
+-   **Limit**: Use the Maximizer to increase loudness while preventing clipping.
+
+## Support & Donations
+If you find oXygen useful and want to support its development, consider buying me a beer! ☕
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/wamphyre94078)
 
 ---
-*Built with ❤️ using JUCE and C++20.*
+
+**Made with ❤️ for the audio community**

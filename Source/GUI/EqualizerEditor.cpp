@@ -27,7 +27,7 @@ namespace oxygen
             gainSliders[i] = std::move(slider);
         }
         
-        setSize(600, 250);
+        setSize(600, 200);
     }
 
     EqualizerEditor::~EqualizerEditor()

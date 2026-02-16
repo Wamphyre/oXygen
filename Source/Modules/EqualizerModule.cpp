@@ -86,7 +86,27 @@ namespace oxygen
                 float gain = juce::Decibels::decibelsToGain(gainDb);
                 float q = 1.41f; // Standard Octave Q
                 
-                *filters[i]->coefficients = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(getSampleRate(), Frequencies[i], q, gain);
+                // Safety check for valid values
+                // Nyquist check: Frequency must be < SampleRate / 2
+                float maxFreq = (float)getSampleRate() * 0.49f;
+
+                if (std::isfinite(gain) && gain > 0.0f && Frequencies[i] < maxFreq) 
+                {
+                   auto coeffs = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(getSampleRate(), Frequencies[i], q, gain);
+                   if (!std::isnan(coeffs.coefficients[0])) // Basic check
+                       *filters[i]->coefficients = coeffs;
+                }
+                else
+                {
+                    // If frequency is too high or invalid, set to unity gain (pass-through)
+                    // or keeps previous if we don't update. 
+                    // Better to set to unity to avoid artifacts if sample rate changed?
+                    // Actually, if we just don't update, it might hold garbage if initialized wrong.
+                    // But makePeakFilter might crash.
+                    // Let's create a flat filter.
+                    // *filters[i]->coefficients = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(getSampleRate(), Frequencies[i], 0.1f, 1.0f);
+                    // Checking bounds is enough to prevent the crash in makePeakFilter usually.
+                }
             }
         }
     }

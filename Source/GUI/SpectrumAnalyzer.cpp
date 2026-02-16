@@ -1,4 +1,5 @@
 #include "SpectrumAnalyzer.h"
+#include "Theme.h"
 
 namespace oxygen
 {
@@ -99,14 +100,43 @@ namespace oxygen
         g.setGradientFill(fillGradient);
         g.fillPath(spectrumPath);
 
-        // Draw basic grid
-        g.setColour(juce::Colours::white.withAlpha(0.05f));
-        float freqs[] = { 100, 1000, 5000, 10000 };
-        for (float f : freqs)
+        // Draw Frequency Grid & Labels
+        g.setColour(juce::Colours::white.withAlpha(0.2f));
+        g.setFont(oxygen::Theme::Fonts::getBody().withHeight(10.0f));
+        
+        struct GridLine { float freq; const char* label; };
+        GridLine lines[] = { 
+            {100.0f, "100"},
+            {500.0f, "500"},
+            {1000.0f, "1k"},
+            {5000.0f, "5k"},
+            {10000.0f, "10k"}
+        };
+
+        for (const auto& line : lines)
         {
-            float x = juce::jmap(std::log10(f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
-            g.drawVerticalLine((int)x, 0.0f, height);
+            float x = juce::jmap(std::log10(line.freq), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
+            if (x >= 0 && x <= width)
+            {
+                g.drawVerticalLine((int)x, 0.0f, height);
+                g.drawText(line.label, (int)x + 2, (int)height - 12, 30, 12, juce::Justification::left, false);
+            }
         }
+        
+        // Visualize "Hot Zones" (Mud/Resonance areas)
+        // 200-500Hz often problematic 'mud' area
+        float mudX1 = juce::jmap(std::log10(200.0f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
+        float mudX2 = juce::jmap(std::log10(500.0f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
+        
+        g.setColour(juce::Colours::orange.withAlpha(0.05f));
+        g.fillRect(juce::Rectangle<float>(mudX1, 0, mudX2 - mudX1, height));
+        
+        // High shhh area 4k-8k
+        float harshX1 = juce::jmap(std::log10(4000.0f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
+        float harshX2 = juce::jmap(std::log10(8000.0f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
+        
+        g.setColour(juce::Colours::yellow.withAlpha(0.05f));
+        g.fillRect(juce::Rectangle<float>(harshX1, 0, harshX2 - harshX1, height));
     }
 
     void SpectrumAnalyzer::resized()

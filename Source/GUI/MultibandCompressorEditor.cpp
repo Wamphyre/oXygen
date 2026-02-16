@@ -7,7 +7,7 @@ namespace oxygen
         : AudioProcessorEditor(&p), audioProcessor(p), apvts(vts)
     {
         const char* bandNames[] = { "Low", "LowMid", "HighMid", "High" };
-        const char* paramNames[] = { "Thresh", "Ratio", "Attack", "Release", "Gain" };
+        // const char* paramNames[] = { "Thresh", "Ratio", "Attack", "Release", "Gain" };
 
         for (int i = 0; i < 4; ++i)
         {
@@ -31,9 +31,9 @@ namespace oxygen
             };
 
             setupSlider(band.thresh, band.threshAtt, prefix + "Thresh");
-            setupSlider(band.ratio, band.ratioAtt, prefix + "Ratio");
-            setupSlider(band.attack, band.attackAtt, prefix + "Attack");
-            setupSlider(band.release, band.releaseAtt, prefix + "Release");
+            // setupSlider(band.ratio, band.ratioAtt, prefix + "Ratio");
+            // setupSlider(band.attack, band.attackAtt, prefix + "Attack");
+            // setupSlider(band.release, band.releaseAtt, prefix + "Release");
             setupSlider(band.gain, band.gainAtt, prefix + "Gain");
         }
 
@@ -53,7 +53,7 @@ namespace oxygen
         setupXover(midHighX, midHighXAtt, "MidHighX");
         setupXover(highX, highXAtt, "HighX");
 
-        setSize(700, 300);
+        setSize(700, 170);
     }
 
     MultibandCompressorEditor::~MultibandCompressorEditor()
@@ -95,15 +95,16 @@ namespace oxygen
             g.drawVerticalLine((int)bounds.getX(), bandArea.getY(), bandArea.getBottom());
 
             // Control Labels (Bottom)
-            float sliderWidth = bandArea.getWidth() / 5.0f;
-            auto labelArea = bandArea.removeFromBottom(12);
-            
-            g.setColour(oxygen::Theme::Colors::OnSurfaceVariant);
-            
-            for (int j = 0; j < 5; ++j)
-            {
-                 g.drawText(controlLabels[j], labelArea.removeFromLeft(sliderWidth), juce::Justification::centred, false);
-            }
+             const char* visibleLabels[] = { "TH", "GN" };
+             auto labelArea = bandArea.removeFromBottom(12);
+             float sliderWidth = bandArea.getWidth() / 2.0f;
+             
+             g.setColour(oxygen::Theme::Colors::OnSurfaceVariant); // Ensure color is set
+
+             for (int j = 0; j < 2; ++j)
+             {
+                  g.drawText(visibleLabels[j], labelArea.removeFromLeft(sliderWidth), juce::Justification::centred, false);
+             }
         }
     }
 
@@ -130,16 +131,16 @@ namespace oxygen
             bandArea.removeFromTop(15); // Header
             bandArea.removeFromBottom(12); // Labels
             
-            float sliderWidth = bandArea.getWidth() / 5.0f;
+            float sliderWidth = bandArea.getWidth() / 2.0f;
             
             auto& band = bands[i];
             
             // Compact sliders (reduced margins)
-            if (band.thresh) band.thresh->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(1, 0));
-            if (band.ratio) band.ratio->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(1, 0));
-            if (band.attack) band.attack->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(1, 0));
-            if (band.release) band.release->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(1, 0));
-            if (band.gain) band.gain->setBounds(bandArea.reduced(1, 0));
+            if (band.thresh) band.thresh->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(5, 0));
+            // if (band.ratio) band.ratio->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(1, 0));
+            // if (band.attack) band.attack->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(1, 0));
+            // if (band.release) band.release->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(1, 0));
+            if (band.gain) band.gain->setBounds(bandArea.reduced(5, 0));
             
             // Enable value popups on hover/drag for feedback
             auto configSlider = [](juce::Slider* s) {

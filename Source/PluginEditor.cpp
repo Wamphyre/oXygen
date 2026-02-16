@@ -8,7 +8,7 @@ OxygenAudioProcessorEditor::OxygenAudioProcessorEditor (OxygenAudioProcessor& p)
     mainComponent = std::make_unique<MainComponent>(audioProcessor);
     addAndMakeVisible(mainComponent.get());
 
-    setSize (1000, 700);
+    setSize (1100, 1000);
 }
 
 OxygenAudioProcessorEditor::~OxygenAudioProcessorEditor()

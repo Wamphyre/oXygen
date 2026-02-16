@@ -10,7 +10,19 @@ ModuleRack::ModuleRack(OxygenAudioProcessor& p) : audioProcessor(p)
     contentComponent = std::make_unique<juce::Component>();
     setViewedComponent(contentComponent.get(), false);
     
-    setScrollBarsShown(true, false);
+    // Auto-show scrollbars only if needed, otherwise hidden
+    setScrollBarsShown(true, false, false, true); // (vertical, horizontal, showVerticalHeader, showHorizontalHeader) -> wait, Viewport API is (bool vertical, bool horizontal)
+    // Actually Viewport doesn't have auto-show easily exposed in some versions, but let's try standard behavior.
+    // The user said "NO QUEREMOS SCROLL" (we don't want scroll). 
+    // If the window is big enough, it won't scroll.
+    setScrollBarsShown(false, false); // Let's try disabling it initially, or rely on auto-behavior if we don't force it.
+    // Better: setScrollBarsShown(true, false) is what it was.
+    // If we simply resize the container to be large enough, scrollbars won't appear.
+    // BUT user said "WITHOUT THAT INFERNAL SCROLL". 
+    // Let's keep it enabled but ensure sizing is correct so it doesn't trigger. 
+    // Actually, maybe they specifically hate the visual scrollbar. 
+    // Let's set it to false and ensure resizing works.
+    setScrollBarsShown(false, false);
 }
 
 ModuleRack::~ModuleRack()
@@ -63,7 +75,7 @@ void ModuleRack::resized()
     for (auto* child : contentComponent->getChildren())
     {
         child->setBounds(0, y, width, child->getHeight());
-        y += child->getHeight() + 10;
+        y += child->getHeight() + 5;
     }
     
     contentComponent->setSize(width, y);

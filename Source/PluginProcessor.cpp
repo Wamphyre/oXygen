@@ -233,31 +233,74 @@ void OxygenAudioProcessor::moveModuleDown(int index)
 
 void OxygenAudioProcessor::triggerAutoMastering()
 {
-    // 1. Collect features (Mocking features for now)
-    std::vector<float> features = { -25.0f }; // Example: Low loudness
+    // 1. "AI" Analysis Mock (In a real plugin, we would analyze the buffer history)
+    // For now, we apply a "Golden Master" curve and settings (Ozone-like "Modern" target)
 
-    // 2. Run Inference
-    auto params = inferenceEngine->predict(features);
-
-    // 3. Apply results to modules
-    // Find the Gain module in the graph and update it
+    // A. Set Equalizer to "Smiley Face" / Clarity Curve
+    // Boost Subs (60Hz), Cut Mud (300Hz), Boost Air (10kHz+)
     for (auto& node : mainProcessorGraph->getNodes())
     {
         if (auto* processor = node->getProcessor())
         {
-            if (auto* gainModule = dynamic_cast<oxygen::GainModule*>(processor))
+            if (auto* eqModule = dynamic_cast<oxygen::EqualizerModule*>(processor))
             {
-                // If AI suggests target LUFS increase, boost gain
-                if (params.targetLufs > -14.0f) 
-                {
-                    // Simple heuristic: Boost by 3dB if target is higher than current guess
-                    // In a real app we'd calculate exact gain needed
-                    // gainModule->getParameter("gain")->setValueNotifyingHost(1.5f); 
-                    
-                    // Accessing parameter by index or ID directly:
-                    auto* param = gainModule->getParameters()[0]; // Assuming gain is 0
-                    param->setValueNotifyingHost(param->getValue() + 0.1f);
-                }
+                // Reset first
+                for (auto* param : eqModule->getParameters())
+                    if (auto* p = dynamic_cast<juce::RangedAudioParameter*>(param))
+                        if (p->paramID.startsWith("Gain")) p->setValueNotifyingHost(p->convertTo0to1(0.0f));
+
+                // Apply Curve (Indices based on 15 bands: 30, 40, 60, 100, 180, 300, 500, 900, 1.5k, 2.5k, 4k, 6k, 10k, 15k, 20k)
+                // 60Hz (idx 2) +1.5dB
+                // 300Hz (idx 5) -1.0dB
+                // 10kHz (idx 12) +1.5dB
+                // 15kHz (idx 13) +2.0dB
+                
+                auto setGain = [&](int idx, float db) {
+                    if (idx < eqModule->getParameters().size()) {
+                        if (auto* p = dynamic_cast<juce::RangedAudioParameter*>(eqModule->getParameters()[idx + 1])) // +1 for Bypass
+                             p->setValueNotifyingHost(p->convertTo0to1(db));
+                    }
+                };
+
+                // Note: Need ensure parameter indices align. 
+                // Parameter layout: Bypass, Gain0, Gain1... 
+                // So GainN is at index N+1.
+                
+                // Boost Lows (Kick/Bass body)
+                if (auto* p = eqModule->apvts.getParameter("Gain2")) p->setValueNotifyingHost(p->convertTo0to1(1.5f)); // 60Hz
+                
+                // Cut Mud (Boxiness)
+                if (auto* p = eqModule->apvts.getParameter("Gain5")) p->setValueNotifyingHost(p->convertTo0to1(-1.5f)); // 300Hz
+                
+                // Boost Presence/Air (Vocals/Cymbals)
+                if (auto* p = eqModule->apvts.getParameter("Gain12")) p->setValueNotifyingHost(p->convertTo0to1(1.5f)); // 10kHz
+                if (auto* p = eqModule->apvts.getParameter("Gain13")) p->setValueNotifyingHost(p->convertTo0to1(2.0f)); // 15kHz
+            }
+            
+            // B. Set Stereo Imager (Mono Lows, Wide Highs)
+            else if (auto* imagerModule = dynamic_cast<oxygen::StereoImagerModule*>(processor))
+            {
+                // Lows Mono (< 200Hz)
+                if (auto* p = imagerModule->apvts.getParameter("LowWidth")) p->setValueNotifyingHost(p->convertTo0to1(0.2f)); // Nearly mono
+                
+                // LowMids Natural
+                if (auto* p = imagerModule->apvts.getParameter("LowMidWidth")) p->setValueNotifyingHost(p->convertTo0to1(1.0f));
+                
+                // HighMids Wide
+                if (auto* p = imagerModule->apvts.getParameter("HighMidWidth")) p->setValueNotifyingHost(p->convertTo0to1(1.2f));
+                
+                // Highs Very Wide
+                if (auto* p = imagerModule->apvts.getParameter("HighWidth")) p->setValueNotifyingHost(p->convertTo0to1(1.4f));
+            }
+            
+            // C. Set Maximizer (Loud but safe)
+            else if (auto* maxModule = dynamic_cast<oxygen::MaximizerModule*>(processor))
+            {
+                // Target -9 LUFS approx implies -4dB to -6dB Threshold usually for pop
+                // But safer to start conservative
+                if (auto* p = maxModule->apvts.getParameter("Threshold")) p->setValueNotifyingHost(p->convertTo0to1(-3.0f));
+                if (auto* p = maxModule->apvts.getParameter("Ceiling")) p->setValueNotifyingHost(p->convertTo0to1(-0.1f));
+                if (auto* p = maxModule->apvts.getParameter("Release")) p->setValueNotifyingHost(p->convertTo0to1(100.0f)); // Fast/Modern
             }
         }
     }
