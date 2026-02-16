@@ -1,6 +1,6 @@
 # oXygen Mastering Suite
 
-**oXygen** is a free and open-source professional mastering suite built with C++ and the JUCE framework. Designed for high fidelity and flexibility, it features AI-assisted automatic mastering functions, a modern Material Design 3 interface, a powerful 16-band graphic equalizer, and a suite of multiband dynamics processors.
+**oXygen** is a free and open-source mastering suite built with C++ and the JUCE framework. Designed for high fidelity and flexibility, it features AI-assisted automatic mastering functions, a modern Material Design 3 interface, a powerful 16-band graphic equalizer, and a suite of multiband dynamics processors.
 
 ![Version](https://img.shields.io/badge/version-0.0.1-alpha)
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
@@ -128,3 +128,4 @@ If you find oXygen useful and want to support its development, consider buying m
 ---
 
 **Made with ❤️ for the audio community**
+
