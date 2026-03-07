@@ -11,7 +11,7 @@ namespace oxygen
 
         for (int i = 0; i < 4; ++i)
         {
-            auto& band = bands[i];
+            auto& band = bands[(size_t) i];
             juce::String prefix = bandNames[i];
 
             auto setupSlider = [&](std::unique_ptr<juce::Slider>& slider, std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& att, juce::String paramID)
@@ -73,8 +73,6 @@ namespace oxygen
 
         float bandWidth = bounds.getWidth() / 4.0f;
         const char* bandNames[] = { "LOW", "L-MID", "H-MID", "HIGH" };
-        const char* controlLabels[] = { "TH", "RAT", "ATK", "REL", "GN" }; // Very short labels
-
         for (int i = 0; i < 4; ++i)
         {
             auto bandArea = bounds.removeFromLeft(bandWidth);
@@ -133,7 +131,7 @@ namespace oxygen
             
             float sliderWidth = bandArea.getWidth() / 2.0f;
             
-            auto& band = bands[i];
+            auto& band = bands[(size_t) i];
             
             // Compact sliders (reduced margins)
             if (band.thresh) band.thresh->setBounds(bandArea.removeFromLeft((int)sliderWidth).reduced(5, 0));

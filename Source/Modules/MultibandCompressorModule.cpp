@@ -1,16 +1,64 @@
 #include "MultibandCompressorModule.h"
 #include "../GUI/MultibandCompressorEditor.h"
+#include <cmath>
+#include <limits>
 
 namespace oxygen
 {
+    namespace
+    {
+        constexpr float minCrossoverSpacingHz = 20.0f;
+
+        float computeTimeCoefficient(double sampleRate, float timeMs)
+        {
+            if (sampleRate <= 0.0 || timeMs <= 0.0f)
+                return 0.0f;
+
+            return std::exp(-1.0f / (0.001f * timeMs * (float) sampleRate));
+        }
+
+        struct CrossoverSet
+        {
+            float lowMid = 200.0f;
+            float midHigh = 2000.0f;
+            float high = 8000.0f;
+        };
+
+        CrossoverSet sanitizeCrossovers(float sampleRate, float lowMid, float midHigh, float high)
+        {
+            const float nyquist = juce::jmax(60.0f, sampleRate * 0.45f);
+            const float lowMidMax = juce::jmax(20.0f, nyquist - (2.0f * minCrossoverSpacingHz));
+
+            CrossoverSet sanitized;
+            sanitized.lowMid = juce::jlimit(20.0f, lowMidMax, lowMid);
+
+            const float midHighMin = juce::jmin(nyquist - minCrossoverSpacingHz, sanitized.lowMid + minCrossoverSpacingHz);
+            const float midHighMax = juce::jmax(midHighMin, nyquist - minCrossoverSpacingHz);
+            sanitized.midHigh = juce::jlimit(midHighMin, midHighMax, midHigh);
+
+            const float highMin = juce::jmin(nyquist, sanitized.midHigh + minCrossoverSpacingHz);
+            sanitized.high = juce::jlimit(highMin, nyquist, high);
+
+            return sanitized;
+        }
+    }
 
     MultibandCompressorModule::MultibandCompressorModule()
         : MasteringModule("Multiband Comp"),
           apvts(*this, nullptr, "Parameters", createParameterLayout())
     {
-        crossoverLowMid.setType(juce::dsp::LinkwitzRileyFilter<float>::Type::lowpass); // Type doesn't matter for processSample splitting
+        crossoverLowMid.setType(juce::dsp::LinkwitzRileyFilter<float>::Type::lowpass);
         crossoverMidHigh.setType(juce::dsp::LinkwitzRileyFilter<float>::Type::lowpass);
         crossoverHigh.setType(juce::dsp::LinkwitzRileyFilter<float>::Type::lowpass);
+
+        for (auto& params : lastBandParams)
+            params = { std::numeric_limits<float>::quiet_NaN(),
+                       std::numeric_limits<float>::quiet_NaN(),
+                       std::numeric_limits<float>::quiet_NaN(),
+                       std::numeric_limits<float>::quiet_NaN() };
+
+        for (auto& runtimeState : bandRuntimeStates)
+            runtimeState = {};
     }
 
     MultibandCompressorModule::~MultibandCompressorModule()
@@ -48,9 +96,6 @@ namespace oxygen
             layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Gain", prefix + " Gain", 
                 juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f));
         }
-        layout.add(std::make_unique<juce::AudioParameterFloat>("HighWidth", "High Width", 
-            juce::NormalisableRange<float>(0.0f, 2.0f, 0.01f), 1.0f));
-            
         layout.add(std::make_unique<juce::AudioParameterBool>("Bypass", "Bypass", false));
 
         return layout;
@@ -63,26 +108,31 @@ namespace oxygen
         spec.maximumBlockSize = samplesPerBlock;
         spec.numChannels = getTotalNumOutputChannels();
 
+        crossoverLowMid.reset();
+        crossoverMidHigh.reset();
+        crossoverHigh.reset();
         crossoverLowMid.prepare(spec);
         crossoverMidHigh.prepare(spec);
         crossoverHigh.prepare(spec);
-        
-        compressorLow.prepare(spec);
-        compressorLowMid.prepare(spec);
-        compressorHighMid.prepare(spec);
-        compressorHigh.prepare(spec);
         
         // Prepare buffers
         bufferLow.setSize(spec.numChannels, samplesPerBlock);
         bufferLowMid.setSize(spec.numChannels, samplesPerBlock);
         bufferHighMid.setSize(spec.numChannels, samplesPerBlock);
         bufferHigh.setSize(spec.numChannels, samplesPerBlock);
+
+        for (auto& runtimeState : bandRuntimeStates)
+            runtimeState.envelope = 0.0f;
+
+        lastSampleRate = 0.0;
         
         updateParameters();
     }
 
     void MultibandCompressorModule::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
     {
+        juce::ignoreUnused(midiMessages);
+
         if (apvts.getRawParameterValue("Bypass")->load() > 0.5f)
             return;
 
@@ -90,9 +140,11 @@ namespace oxygen
         
         const int numChannels = buffer.getNumChannels();
         const int numSamples = buffer.getNumSamples();
+        if (numChannels == 0 || numSamples == 0)
+            return;
         
         // Ensure buffers are large enough (redundant if prepare called correctly, but safe)
-        if (bufferLow.getNumSamples() < numSamples)
+        if (bufferLow.getNumChannels() != numChannels || bufferLow.getNumSamples() < numSamples)
         {
             bufferLow.setSize(numChannels, numSamples, true, true, true);
             bufferLowMid.setSize(numChannels, numSamples, true, true, true);
@@ -132,22 +184,11 @@ namespace oxygen
             }
         }
         
-        // Process Compressors
-        juce::dsp::AudioBlock<float> blockLow(bufferLow);
-        juce::dsp::AudioBlock<float> blockLowMid(bufferLowMid);
-        juce::dsp::AudioBlock<float> blockHighMid(bufferHighMid);
-        juce::dsp::AudioBlock<float> blockHigh(bufferHigh);
-        
-        // Contexts
-        juce::dsp::ProcessContextReplacing<float> ctxLow(blockLow);
-        juce::dsp::ProcessContextReplacing<float> ctxLowMid(blockLowMid);
-        juce::dsp::ProcessContextReplacing<float> ctxHighMid(blockHighMid);
-        juce::dsp::ProcessContextReplacing<float> ctxHigh(blockHigh);
-        
-        compressorLow.process(ctxLow);
-        compressorLowMid.process(ctxLowMid);
-        compressorHighMid.process(ctxHighMid);
-        compressorHigh.process(ctxHigh);
+        // Stereo-linked dynamics keeps the stereo image stable on asymmetric material.
+        processStereoLinkedBand(bufferLow, bandRuntimeStates[0]);
+        processStereoLinkedBand(bufferLowMid, bandRuntimeStates[1]);
+        processStereoLinkedBand(bufferHighMid, bandRuntimeStates[2]);
+        processStereoLinkedBand(bufferHigh, bandRuntimeStates[3]);
         
         // Apply Gains and Sum back to Output
         // Note: dsp::Compressor doesn't apply makeup gain automatically in this version?
@@ -159,54 +200,107 @@ namespace oxygen
         const float gainLowMid = juce::Decibels::decibelsToGain(apvts.getRawParameterValue("LowMidGain")->load());
         const float gainHighMid = juce::Decibels::decibelsToGain(apvts.getRawParameterValue("HighMidGain")->load());
         const float gainHigh = juce::Decibels::decibelsToGain(apvts.getRawParameterValue("HighGain")->load());
-        
-        // Safety: Check for NaNs in sub-buffers before ensuring
-        // If we encounter NaNs, bypass processing this block to save ears/speakers
-        bool invalidOutput = false;
-        
+
         for (int ch = 0; ch < numChannels; ++ch)
         {
-            if (bufferLow.getMagnitude(ch, 0, numSamples) > 10.0f) invalidOutput = true; // Simple sanity check
-            // Real NaN check ideally done per sample but expensive.
-            // Let's rely on standard summing, but if result is silent, we might want to know.
-            
             buffer.addFrom(ch, 0, bufferLow, ch, 0, numSamples, gainLow);
             buffer.addFrom(ch, 0, bufferLowMid, ch, 0, numSamples, gainLowMid);
             buffer.addFrom(ch, 0, bufferHighMid, ch, 0, numSamples, gainHighMid);
             buffer.addFrom(ch, 0, bufferHigh, ch, 0, numSamples, gainHigh);
+
+            auto* out = buffer.getWritePointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                if (!std::isfinite(out[i]))
+                    out[i] = 0.0f;
+            }
         }
     }
     
     void MultibandCompressorModule::updateParameters()
     {
-        float lmX = apvts.getRawParameterValue("LowMidX")->load();
-        float mhX = apvts.getRawParameterValue("MidHighX")->load();
-        float hX = apvts.getRawParameterValue("HighX")->load();
+        const auto sampleRate = getSampleRate();
+        if (sampleRate <= 0.0)
+            return;
 
-        if (lmX != lastLowMidX) { crossoverLowMid.setCutoffFrequency(lmX); lastLowMidX = lmX; }
-        if (mhX != lastMidHighX) { crossoverMidHigh.setCutoffFrequency(mhX); lastMidHighX = mhX; }
-        if (hX != lastHighX) { crossoverHigh.setCutoffFrequency(hX); lastHighX = hX; }
+        const auto crossovers = sanitizeCrossovers((float) sampleRate,
+                                                   apvts.getRawParameterValue("LowMidX")->load(),
+                                                   apvts.getRawParameterValue("MidHighX")->load(),
+                                                   apvts.getRawParameterValue("HighX")->load());
+
+        if (std::abs(crossovers.lowMid - lastLowMidX) > 0.001f)
+        {
+            crossoverLowMid.setCutoffFrequency(crossovers.lowMid);
+            lastLowMidX = crossovers.lowMid;
+        }
+
+        if (std::abs(crossovers.midHigh - lastMidHighX) > 0.001f)
+        {
+            crossoverMidHigh.setCutoffFrequency(crossovers.midHigh);
+            lastMidHighX = crossovers.midHigh;
+        }
+
+        if (std::abs(crossovers.high - lastHighX) > 0.001f)
+        {
+            crossoverHigh.setCutoffFrequency(crossovers.high);
+            lastHighX = crossovers.high;
+        }
         
+        const bool sampleRateChanged = std::abs(sampleRate - lastSampleRate) > 1.0e-6;
         const char* bandNames[] = { "Low", "LowMid", "HighMid", "High" };
-        juce::dsp::Compressor<float>* comps[] = { &compressorLow, &compressorLowMid, &compressorHighMid, &compressorHigh };
 
         for (int i = 0; i < 4; ++i)
         {
             juce::String prefix = bandNames[i];
-            float t = apvts.getRawParameterValue(prefix + "Thresh")->load();
-            float r = apvts.getRawParameterValue(prefix + "Ratio")->load();
-            float a = apvts.getRawParameterValue(prefix + "Attack")->load();
-            float rl = apvts.getRawParameterValue(prefix + "Release")->load();
+            const float t = juce::jlimit(-60.0f, 0.0f, apvts.getRawParameterValue(prefix + "Thresh")->load());
+            const float r = juce::jmax(1.0f, apvts.getRawParameterValue(prefix + "Ratio")->load());
+            const float a = juce::jlimit(0.1f, 100.0f, apvts.getRawParameterValue(prefix + "Attack")->load());
+            const float rl = juce::jlimit(10.0f, 1000.0f, apvts.getRawParameterValue(prefix + "Release")->load());
 
-            if (t != lastBandParams[i].thresh || r != lastBandParams[i].ratio || 
-                a != lastBandParams[i].attack || rl != lastBandParams[i].release)
+            if (sampleRateChanged
+                || std::abs(t - lastBandParams[i].thresh) > 0.001f
+                || std::abs(r - lastBandParams[i].ratio) > 0.001f
+                || std::abs(a - lastBandParams[i].attack) > 0.001f
+                || std::abs(rl - lastBandParams[i].release) > 0.001f)
             {
-                comps[i]->setThreshold(t);
-                comps[i]->setRatio(r);
-                comps[i]->setAttack(a);
-                comps[i]->setRelease(rl);
-
                 lastBandParams[i] = { t, r, a, rl };
+                bandRuntimeStates[i].thresholdGain = juce::Decibels::decibelsToGain(t, -200.0f);
+                bandRuntimeStates[i].ratioInverse = 1.0f / r;
+                bandRuntimeStates[i].attackCoeff = computeTimeCoefficient(sampleRate, a);
+                bandRuntimeStates[i].releaseCoeff = computeTimeCoefficient(sampleRate, rl);
+            }
+        }
+
+        lastSampleRate = sampleRate;
+    }
+
+    void MultibandCompressorModule::processStereoLinkedBand(juce::AudioBuffer<float>& bandBuffer, BandRuntimeState& state)
+    {
+        const int numChannels = bandBuffer.getNumChannels();
+        const int numSamples = bandBuffer.getNumSamples();
+        if (numChannels == 0 || numSamples == 0)
+            return;
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            float detector = 0.0f;
+            for (int channel = 0; channel < numChannels; ++channel)
+                detector = juce::jmax(detector, std::abs(bandBuffer.getReadPointer(channel)[sample]));
+
+            const float coefficient = (detector > state.envelope) ? state.attackCoeff : state.releaseCoeff;
+            state.envelope = coefficient * state.envelope + (1.0f - coefficient) * detector;
+
+            float gain = 1.0f;
+            if (state.envelope > state.thresholdGain && state.thresholdGain > 0.0f)
+                gain = std::pow(state.envelope / state.thresholdGain, state.ratioInverse - 1.0f);
+
+            if (!std::isfinite(gain))
+                gain = 1.0f;
+
+            for (int channel = 0; channel < numChannels; ++channel)
+            {
+                auto* data = bandBuffer.getWritePointer(channel);
+                data[sample] *= gain;
             }
         }
     }

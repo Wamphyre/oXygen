@@ -1,21 +1,83 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <vector>
+#include <array>
 #include <memory>
+#include <vector>
 
 // Forward declaration to avoid including heavy ONNX headers in header
 namespace Ort { class Session; class Env; }
 
 namespace oxygen
 {
+    enum class AssistantGenre
+    {
+        Universal = 0,
+        Pop,
+        HipHop,
+        Electronic,
+        Rock,
+        Acoustic,
+        Orchestral
+    };
+
+    enum class ArtisticDirection
+    {
+        Balanced = 0,
+        Transparent,
+        Warm,
+        Punchy,
+        Wide,
+        Aggressive
+    };
+
+    struct AssistantContext
+    {
+        AssistantGenre genre = AssistantGenre::Universal;
+        ArtisticDirection direction = ArtisticDirection::Balanced;
+    };
+
     struct MasteringParameters
     {
-        float targetLufs = -14.0f;
-        float eqLowGain = 0.0f;
-        float eqMidGain = 0.0f;
-        float eqHighGain = 0.0f;
-        float stereoWidth = 1.0f;
+        static constexpr int eqBandCount = 15;
+
+        std::array<float, eqBandCount> eqBandGains {};
+
+        float lowMidX = 120.0f;
+        float midHighX = 1400.0f;
+        float highX = 6000.0f;
+
+        float lowThresh = -18.0f;
+        float lowRatio = 1.5f;
+        float lowAttack = 30.0f;
+        float lowRelease = 180.0f;
+
+        float lowMidThresh = -16.0f;
+        float lowMidRatio = 1.35f;
+        float lowMidAttack = 20.0f;
+        float lowMidRelease = 150.0f;
+
+        float highMidThresh = -14.0f;
+        float highMidRatio = 1.25f;
+        float highMidAttack = 8.0f;
+        float highMidRelease = 120.0f;
+
+        float highThresh = -12.0f;
+        float highRatio = 1.2f;
+        float highAttack = 5.0f;
+        float highRelease = 100.0f;
+
+        float lowWidth = 0.10f;
+        float lowMidWidth = 0.95f;
+        float highMidWidth = 1.18f;
+        float highWidth = 1.35f;
+
+        float outputGain = 1.0f;
+        float maximizerThreshold = -2.0f;
+        float maximizerCeiling = -1.0f;
+        float maximizerRelease = 120.0f;
+
+        bool usedAnalysis = false;
     };
 
     class InferenceEngine
@@ -28,6 +90,10 @@ namespace oxygen
         
         // Analyze audio features and return suggested mastering parameters
         MasteringParameters predict(const std::vector<float>& audioFeatures);
+        MasteringParameters predict(const juce::AudioBuffer<float>& recentAudio, double sampleRate);
+        MasteringParameters predict(const juce::AudioBuffer<float>& recentAudio,
+                                    double sampleRate,
+                                    const AssistantContext& context);
 
         bool isModelLoaded() const { return modelLoaded; }
 

@@ -33,14 +33,14 @@ namespace oxygen
         };
 
     private:
-        // DSP Chain: 16 bands of IIR filters
-        // Using a std::vector of filters for flexibility if ProcessorChain is too verbose for 16
-        // Or simplified ProcessorChain. Let's use a vector of IIR Filters for loopability.
+        // One peak filter per EQ band, duplicated across all active channels.
         
-        using Filter = juce::dsp::IIR::Filter<float>;
+        using MonoFilter = juce::dsp::IIR::Filter<float>;
+        using Filter = juce::dsp::ProcessorDuplicator<MonoFilter, juce::dsp::IIR::Coefficients<float>>;
         std::vector<std::unique_ptr<Filter>> filters;
         
         float lastGains[NumBands];
+        double lastSampleRate = 0.0;
         
         // Helper to update filters
         void updateFilters();

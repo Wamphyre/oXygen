@@ -5,6 +5,44 @@
 #include "Modules/MultibandCompressorModule.h"
 #include "Modules/MaximizerModule.h"
 #include "Modules/StereoImagerModule.h"
+#include <algorithm>
+
+namespace
+{
+    constexpr auto pluginStateType = "OXYGEN_STATE";
+    constexpr auto moduleOrderStateType = "MODULE_ORDER";
+    constexpr auto moduleStatesType = "MODULE_STATES";
+    constexpr auto moduleStateType = "MODULE";
+
+    void storeParameters(juce::ValueTree& moduleState, juce::AudioProcessor& processor)
+    {
+        for (auto* parameter : processor.getParameters())
+        {
+            if (auto* parameterWithId = dynamic_cast<juce::AudioProcessorParameterWithID*>(parameter))
+                moduleState.setProperty(parameterWithId->paramID, parameterWithId->getValue(), nullptr);
+        }
+    }
+
+    void restoreParameters(const juce::ValueTree& moduleState, juce::AudioProcessor& processor)
+    {
+        for (auto* parameter : processor.getParameters())
+        {
+            if (auto* parameterWithId = dynamic_cast<juce::AudioProcessorParameterWithID*>(parameter))
+            {
+                if (moduleState.hasProperty(parameterWithId->paramID))
+                    parameterWithId->setValueNotifyingHost((float) moduleState.getProperty(parameterWithId->paramID));
+            }
+        }
+    }
+
+    float getChannelMagnitude(const juce::AudioBuffer<float>& buffer, int channel)
+    {
+        if (channel < 0 || channel >= buffer.getNumChannels() || buffer.getNumSamples() == 0)
+            return 0.0f;
+
+        return buffer.getMagnitude(channel, 0, buffer.getNumSamples());
+    }
+}
 
 using namespace oxygen;
 
@@ -92,6 +130,20 @@ void OxygenAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
                                              getMainBusNumOutputChannels(),
                                              sampleRate, samplesPerBlock);
     mainProcessorGraph->prepareToPlay(sampleRate, samplesPerBlock);
+
+    {
+        const juce::SpinLock::ScopedLockType historyLock(assistantHistoryLock);
+        assistantHistoryDecimationFactor = juce::jmax(1, juce::roundToInt(sampleRate / assistantTargetSampleRate));
+        assistantHistorySampleRate = sampleRate / (double) assistantHistoryDecimationFactor;
+        assistantHistoryCapacity = juce::jmax(4096, juce::roundToInt(assistantHistorySampleRate * assistantAnalysisWindowSeconds));
+        assistantHistoryBuffer.setSize(2, assistantHistoryCapacity);
+        assistantHistoryBuffer.clear();
+        assistantHistoryWritePosition = 0;
+        assistantHistoryNumValidSamples = 0;
+        assistantDownsampleCounter = 0;
+        assistantDownsampleAccumL = 0.0f;
+        assistantDownsampleAccumR = 0.0f;
+    }
     
     // Refresh connections to match the new layout
     updateGraphConnections();
@@ -130,19 +182,72 @@ void OxygenAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // Capture Input Level (RMS simplified to Peak for now)
-    inputLevel.store(buffer.getMagnitude(0, buffer.getNumSamples()));
+    if (buffer.getNumChannels() > 0)
+    {
+        const juce::SpinLock::ScopedTryLockType historyLock(assistantHistoryLock);
+        if (historyLock.isLocked())
+        {
+            const auto* left = buffer.getReadPointer(0);
+            const auto* right = (buffer.getNumChannels() > 1) ? buffer.getReadPointer(1) : left;
+
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                assistantDownsampleAccumL += left[sample];
+                assistantDownsampleAccumR += right[sample];
+                ++assistantDownsampleCounter;
+
+                if (assistantDownsampleCounter >= assistantHistoryDecimationFactor)
+                {
+                    const float storedL = assistantDownsampleAccumL / (float) assistantDownsampleCounter;
+                    const float storedR = assistantDownsampleAccumR / (float) assistantDownsampleCounter;
+
+                    assistantHistoryBuffer.setSample(0, assistantHistoryWritePosition, storedL);
+                    assistantHistoryBuffer.setSample(1, assistantHistoryWritePosition, storedR);
+                    assistantHistoryWritePosition = (assistantHistoryWritePosition + 1) % assistantHistoryCapacity;
+                    assistantHistoryNumValidSamples = juce::jmin(assistantHistoryNumValidSamples + 1,
+                                                                 assistantHistoryCapacity);
+                    assistantDownsampleCounter = 0;
+                    assistantDownsampleAccumL = 0.0f;
+                    assistantDownsampleAccumR = 0.0f;
+                }
+            }
+        }
+    }
+
+    const float inL = getChannelMagnitude(buffer, 0);
+    const float inR = (buffer.getNumChannels() > 1) ? getChannelMagnitude(buffer, 1) : inL;
+    inputLevelL.store(inL);
+    inputLevelR.store(inR);
 
     // Process audio through the graph
     mainProcessorGraph->processBlock(buffer, midiMessages);
     
-    // Capture Output Level
-    outputLevel.store(buffer.getMagnitude(0, buffer.getNumSamples()));
+    const float outL = getChannelMagnitude(buffer, 0);
+    const float outR = (buffer.getNumChannels() > 1) ? getChannelMagnitude(buffer, 1) : outL;
+    outputLevelL.store(outL);
+    outputLevelR.store(outR);
 
-    // Send to visualizer (Mono sum or Left channel)
+    // Feed the analyser with a mono sum of the processed output.
     if (buffer.getNumChannels() > 0)
     {
-        audioBufferQueue.push(buffer.getReadPointer(0), buffer.getNumSamples());
+        analyzerScratchBuffer.resize((size_t) buffer.getNumSamples());
+
+        if (buffer.getNumChannels() == 1)
+        {
+            juce::FloatVectorOperations::copy(analyzerScratchBuffer.data(),
+                                              buffer.getReadPointer(0),
+                                              buffer.getNumSamples());
+        }
+        else
+        {
+            const auto* left = buffer.getReadPointer(0);
+            const auto* right = buffer.getReadPointer(1);
+
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+                analyzerScratchBuffer[(size_t) sample] = 0.5f * (left[sample] + right[sample]);
+        }
+
+        audioBufferQueue.push(analyzerScratchBuffer.data(), buffer.getNumSamples());
     }
 }
 
@@ -163,6 +268,7 @@ void OxygenAudioProcessor::initialiseGraph()
     moduleNodes.push_back(mainProcessorGraph->addNode(std::make_unique<oxygen::MaximizerModule>()));
 
     updateGraphConnections();
+    notifyGraphChanged();
 }
 
 void OxygenAudioProcessor::updateGraphConnections()
@@ -173,44 +279,41 @@ void OxygenAudioProcessor::updateGraphConnections()
     
     int numInputChannels = getMainBusNumInputChannels();
     int numOutputChannels = getMainBusNumOutputChannels();
+    const int numChannelsToProcess = juce::jmin(juce::jmin(numInputChannels, numOutputChannels), 2);
+
+    auto addConnectionIfLegal = [this](juce::AudioProcessorGraph::NodeID srcNode, int srcChannel,
+                                       juce::AudioProcessorGraph::NodeID dstNode, int dstChannel)
+    {
+        const juce::AudioProcessorGraph::Connection connection { { srcNode, srcChannel }, { dstNode, dstChannel } };
+        if (mainProcessorGraph->isConnectionLegal(connection))
+            mainProcessorGraph->addConnection(connection);
+    };
 
     if (moduleNodes.empty())
     {
-        for (int channel = 0; channel < numInputChannels; ++channel)
-        {
-            if (channel < numOutputChannels)
-                mainProcessorGraph->addConnection({ { audioInputNode->nodeID, channel }, { audioOutputNode->nodeID, channel } });
-        }
+        for (int channel = 0; channel < numChannelsToProcess; ++channel)
+            addConnectionIfLegal(audioInputNode->nodeID, channel, audioOutputNode->nodeID, channel);
         return;
     }
 
     // Connect Input -> First Module
     // Safety check for empty graph processing
-    if (numInputChannels == 0 || numOutputChannels == 0) return;
+    if (numChannelsToProcess == 0)
+        return;
 
-    for (int channel = 0; channel < numInputChannels; ++channel)
-    {
-         if (channel < 2) // Limit to stereo max for now if modules support it
-            mainProcessorGraph->addConnection({ { audioInputNode->nodeID, channel }, { moduleNodes[0]->nodeID, channel } });
-    }
+    for (int channel = 0; channel < numChannelsToProcess; ++channel)
+        addConnectionIfLegal(audioInputNode->nodeID, channel, moduleNodes[0]->nodeID, channel);
 
     // Connect Modules in sequence
     for (size_t i = 1; i < moduleNodes.size(); ++i)
     {
-        for (int channel = 0; channel < 2; ++channel) // Assuming modules are internal stereo/mono adaptive
-        {
-            // Connect both channels if possible. Even if mono, modules usually have 2 inputs in JUCE Graph unless restricted.
-            // But we should check numInputChannels too? No, internal chain can be stereo even if input is mono potentially.
-            mainProcessorGraph->addConnection({ { moduleNodes[i-1]->nodeID, channel }, { moduleNodes[i]->nodeID, channel } });
-        }
+        for (int channel = 0; channel < numChannelsToProcess; ++channel)
+            addConnectionIfLegal(moduleNodes[i - 1]->nodeID, channel, moduleNodes[i]->nodeID, channel);
     }
 
     // Connect Last Module -> Output
-    for (int channel = 0; channel < numOutputChannels; ++channel)
-    {
-        if (channel < 2)
-            mainProcessorGraph->addConnection({ { moduleNodes.back()->nodeID, channel }, { audioOutputNode->nodeID, channel } });
-    }
+    for (int channel = 0; channel < numChannelsToProcess; ++channel)
+        addConnectionIfLegal(moduleNodes.back()->nodeID, channel, audioOutputNode->nodeID, channel);
 }
 
 void OxygenAudioProcessor::moveModuleUp(int index)
@@ -219,6 +322,7 @@ void OxygenAudioProcessor::moveModuleUp(int index)
     {
         std::swap(moduleNodes[index], moduleNodes[index - 1]);
         updateGraphConnections();
+        notifyGraphChanged();
     }
 }
 
@@ -228,79 +332,91 @@ void OxygenAudioProcessor::moveModuleDown(int index)
     {
         std::swap(moduleNodes[index], moduleNodes[index + 1]);
         updateGraphConnections();
+        notifyGraphChanged();
     }
 }
 
-void OxygenAudioProcessor::triggerAutoMastering()
+void OxygenAudioProcessor::triggerMasterAssistant()
 {
-    // 1. "AI" Analysis Mock (In a real plugin, we would analyze the buffer history)
-    // For now, we apply a "Golden Master" curve and settings (Ozone-like "Modern" target)
+    auto analysisBuffer = buildAssistantAnalysisBuffer();
+    const auto params = (inferenceEngine != nullptr)
+                      ? inferenceEngine->predict(analysisBuffer,
+                                                 assistantHistorySampleRate,
+                                                 { assistantGenre, artisticDirection })
+                      : oxygen::MasteringParameters {};
 
-    // A. Set Equalizer to "Smiley Face" / Clarity Curve
-    // Boost Subs (60Hz), Cut Mud (300Hz), Boost Air (10kHz+)
     for (auto& node : mainProcessorGraph->getNodes())
     {
         if (auto* processor = node->getProcessor())
         {
+            auto setParameter = [] (juce::AudioProcessorValueTreeState& apvts, const juce::String& id, float value)
+            {
+                if (auto* parameter = apvts.getParameter(id))
+                    parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+            };
+
             if (auto* eqModule = dynamic_cast<oxygen::EqualizerModule*>(processor))
             {
-                // Reset first
                 for (auto* param : eqModule->getParameters())
-                    if (auto* p = dynamic_cast<juce::RangedAudioParameter*>(param))
-                        if (p->paramID.startsWith("Gain")) p->setValueNotifyingHost(p->convertTo0to1(0.0f));
+                {
+                    auto* parameterWithId = dynamic_cast<juce::AudioProcessorParameterWithID*>(param);
+                    auto* rangedParameter = dynamic_cast<juce::RangedAudioParameter*>(param);
 
-                // Apply Curve (Indices based on 15 bands: 30, 40, 60, 100, 180, 300, 500, 900, 1.5k, 2.5k, 4k, 6k, 10k, 15k, 20k)
-                // 60Hz (idx 2) +1.5dB
-                // 300Hz (idx 5) -1.0dB
-                // 10kHz (idx 12) +1.5dB
-                // 15kHz (idx 13) +2.0dB
-                
-                auto setGain = [&](int idx, float db) {
-                    if (idx < eqModule->getParameters().size()) {
-                        if (auto* p = dynamic_cast<juce::RangedAudioParameter*>(eqModule->getParameters()[idx + 1])) // +1 for Bypass
-                             p->setValueNotifyingHost(p->convertTo0to1(db));
-                    }
-                };
+                    if (parameterWithId != nullptr && rangedParameter != nullptr)
+                        if (parameterWithId->paramID.startsWith("Gain"))
+                            rangedParameter->setValueNotifyingHost(rangedParameter->convertTo0to1(0.0f));
+                }
 
-                // Note: Need ensure parameter indices align. 
-                // Parameter layout: Bypass, Gain0, Gain1... 
-                // So GainN is at index N+1.
-                
-                // Boost Lows (Kick/Bass body)
-                if (auto* p = eqModule->apvts.getParameter("Gain2")) p->setValueNotifyingHost(p->convertTo0to1(1.5f)); // 60Hz
-                
-                // Cut Mud (Boxiness)
-                if (auto* p = eqModule->apvts.getParameter("Gain5")) p->setValueNotifyingHost(p->convertTo0to1(-1.5f)); // 300Hz
-                
-                // Boost Presence/Air (Vocals/Cymbals)
-                if (auto* p = eqModule->apvts.getParameter("Gain12")) p->setValueNotifyingHost(p->convertTo0to1(1.5f)); // 10kHz
-                if (auto* p = eqModule->apvts.getParameter("Gain13")) p->setValueNotifyingHost(p->convertTo0to1(2.0f)); // 15kHz
+                for (int band = 0; band < oxygen::MasteringParameters::eqBandCount; ++band)
+                    setParameter(eqModule->apvts, "Gain" + juce::String(band), params.eqBandGains[(size_t) band]);
             }
-            
-            // B. Set Stereo Imager (Mono Lows, Wide Highs)
+            else if (auto* compModule = dynamic_cast<oxygen::MultibandCompressorModule*>(processor))
+            {
+                setParameter(compModule->apvts, "LowMidX", params.lowMidX);
+                setParameter(compModule->apvts, "MidHighX", params.midHighX);
+                setParameter(compModule->apvts, "HighX", params.highX);
+
+                setParameter(compModule->apvts, "LowThresh", params.lowThresh);
+                setParameter(compModule->apvts, "LowRatio", params.lowRatio);
+                setParameter(compModule->apvts, "LowAttack", params.lowAttack);
+                setParameter(compModule->apvts, "LowRelease", params.lowRelease);
+                setParameter(compModule->apvts, "LowGain", 0.0f);
+
+                setParameter(compModule->apvts, "LowMidThresh", params.lowMidThresh);
+                setParameter(compModule->apvts, "LowMidRatio", params.lowMidRatio);
+                setParameter(compModule->apvts, "LowMidAttack", params.lowMidAttack);
+                setParameter(compModule->apvts, "LowMidRelease", params.lowMidRelease);
+                setParameter(compModule->apvts, "LowMidGain", 0.0f);
+
+                setParameter(compModule->apvts, "HighMidThresh", params.highMidThresh);
+                setParameter(compModule->apvts, "HighMidRatio", params.highMidRatio);
+                setParameter(compModule->apvts, "HighMidAttack", params.highMidAttack);
+                setParameter(compModule->apvts, "HighMidRelease", params.highMidRelease);
+                setParameter(compModule->apvts, "HighMidGain", 0.0f);
+
+                setParameter(compModule->apvts, "HighThresh", params.highThresh);
+                setParameter(compModule->apvts, "HighRatio", params.highRatio);
+                setParameter(compModule->apvts, "HighAttack", params.highAttack);
+                setParameter(compModule->apvts, "HighRelease", params.highRelease);
+                setParameter(compModule->apvts, "HighGain", 0.0f);
+            }
             else if (auto* imagerModule = dynamic_cast<oxygen::StereoImagerModule*>(processor))
             {
-                // Lows Mono (< 200Hz)
-                if (auto* p = imagerModule->apvts.getParameter("LowWidth")) p->setValueNotifyingHost(p->convertTo0to1(0.2f)); // Nearly mono
-                
-                // LowMids Natural
-                if (auto* p = imagerModule->apvts.getParameter("LowMidWidth")) p->setValueNotifyingHost(p->convertTo0to1(1.0f));
-                
-                // HighMids Wide
-                if (auto* p = imagerModule->apvts.getParameter("HighMidWidth")) p->setValueNotifyingHost(p->convertTo0to1(1.2f));
-                
-                // Highs Very Wide
-                if (auto* p = imagerModule->apvts.getParameter("HighWidth")) p->setValueNotifyingHost(p->convertTo0to1(1.4f));
+                setParameter(imagerModule->apvts, "LowWidth", params.lowWidth);
+                setParameter(imagerModule->apvts, "LowMidWidth", params.lowMidWidth);
+                setParameter(imagerModule->apvts, "HighMidWidth", params.highMidWidth);
+                setParameter(imagerModule->apvts, "HighWidth", params.highWidth);
             }
-            
-            // C. Set Maximizer (Loud but safe)
+            else if (auto* gainModule = dynamic_cast<oxygen::GainModule*>(processor))
+            {
+                if (auto* gainParameter = dynamic_cast<juce::RangedAudioParameter*>(gainModule->getParameters()[0]))
+                    gainParameter->setValueNotifyingHost(gainParameter->convertTo0to1(params.outputGain));
+            }
             else if (auto* maxModule = dynamic_cast<oxygen::MaximizerModule*>(processor))
             {
-                // Target -9 LUFS approx implies -4dB to -6dB Threshold usually for pop
-                // But safer to start conservative
-                if (auto* p = maxModule->apvts.getParameter("Threshold")) p->setValueNotifyingHost(p->convertTo0to1(-3.0f));
-                if (auto* p = maxModule->apvts.getParameter("Ceiling")) p->setValueNotifyingHost(p->convertTo0to1(-0.1f));
-                if (auto* p = maxModule->apvts.getParameter("Release")) p->setValueNotifyingHost(p->convertTo0to1(100.0f)); // Fast/Modern
+                setParameter(maxModule->apvts, "Threshold", params.maximizerThreshold);
+                setParameter(maxModule->apvts, "Ceiling", params.maximizerCeiling);
+                setParameter(maxModule->apvts, "Release", params.maximizerRelease);
             }
         }
     }
@@ -318,15 +434,207 @@ juce::AudioProcessorEditor* OxygenAudioProcessor::createEditor()
 
 void OxygenAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    juce::ValueTree root(pluginStateType);
+    root.setProperty("version", 1, nullptr);
+    root.setProperty("assistantGenre", (int) assistantGenre, nullptr);
+    root.setProperty("artisticDirection", (int) artisticDirection, nullptr);
+
+    juce::ValueTree moduleOrder(moduleOrderStateType);
+    for (const auto& name : getCurrentModuleOrder())
+    {
+        juce::ValueTree child(moduleStateType);
+        child.setProperty("name", name, nullptr);
+        moduleOrder.addChild(child, -1, nullptr);
+    }
+
+    juce::ValueTree moduleStates(moduleStatesType);
+    for (const auto& node : moduleNodes)
+    {
+        if (auto* processor = node->getProcessor())
+        {
+            juce::ValueTree moduleState(moduleStateType);
+            moduleState.setProperty("name", processor->getName(), nullptr);
+            storeParameters(moduleState, *processor);
+            moduleStates.addChild(moduleState, -1, nullptr);
+        }
+    }
+
+    root.addChild(moduleOrder, -1, nullptr);
+    root.addChild(moduleStates, -1, nullptr);
+
+    if (auto xml = root.createXml())
+        copyXmlToBinary(*xml, destData);
 }
 
 void OxygenAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
+    std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
+    if (xmlState == nullptr)
+        return;
+
+    const auto root = juce::ValueTree::fromXml(*xmlState);
+    if (!root.isValid() || !root.hasType(pluginStateType))
+        return;
+
+    if (root.hasProperty("assistantGenre"))
+        assistantGenre = (oxygen::AssistantGenre) (int) root.getProperty("assistantGenre");
+
+    if (root.hasProperty("artisticDirection"))
+        artisticDirection = (oxygen::ArtisticDirection) (int) root.getProperty("artisticDirection");
+
+    if (auto orderState = root.getChildWithName(moduleOrderStateType); orderState.isValid())
+    {
+        juce::StringArray savedOrder;
+        for (const auto& child : orderState)
+        {
+            if (child.hasProperty("name"))
+                savedOrder.add(child["name"].toString());
+        }
+
+        applyModuleOrder(savedOrder);
+    }
+
+    if (auto states = root.getChildWithName(moduleStatesType); states.isValid())
+    {
+        for (const auto& moduleState : states)
+        {
+            const auto moduleName = moduleState["name"].toString();
+            auto it = std::find_if(moduleNodes.begin(), moduleNodes.end(),
+                                   [&moduleName](const juce::AudioProcessorGraph::Node::Ptr& node)
+                                   {
+                                       return node != nullptr
+                                           && node->getProcessor() != nullptr
+                                           && node->getProcessor()->getName() == moduleName;
+                                   });
+
+            if (it != moduleNodes.end())
+                if (auto* processor = (*it)->getProcessor())
+                    restoreParameters(moduleState, *processor);
+        }
+    }
+}
+
+float OxygenAudioProcessor::getInputLevel(int channel) const
+{
+    return (channel <= 0) ? inputLevelL.load() : inputLevelR.load();
+}
+
+float OxygenAudioProcessor::getOutputLevel(int channel) const
+{
+    return (channel <= 0) ? outputLevelL.load() : outputLevelR.load();
+}
+
+oxygen::AssistantGenre OxygenAudioProcessor::getAssistantGenre() const
+{
+    return assistantGenre;
+}
+
+oxygen::ArtisticDirection OxygenAudioProcessor::getArtisticDirection() const
+{
+    return artisticDirection;
+}
+
+void OxygenAudioProcessor::setAssistantGenre(oxygen::AssistantGenre genre)
+{
+    assistantGenre = genre;
+}
+
+void OxygenAudioProcessor::setArtisticDirection(oxygen::ArtisticDirection direction)
+{
+    artisticDirection = direction;
+}
+
+void OxygenAudioProcessor::setGraphChangedCallback(std::function<void()> callback)
+{
+    graphChangedCallback = std::move(callback);
+}
+
+juce::StringArray OxygenAudioProcessor::getCurrentModuleOrder() const
+{
+    juce::StringArray order;
+    for (const auto& node : moduleNodes)
+    {
+        if (node != nullptr)
+            if (auto* processor = node->getProcessor())
+                order.add(processor->getName());
+    }
+
+    return order;
+}
+
+void OxygenAudioProcessor::applyModuleOrder(const juce::StringArray& savedOrder)
+{
+    if (savedOrder.isEmpty())
+        return;
+
+    std::vector<juce::AudioProcessorGraph::Node::Ptr> remaining(moduleNodes.begin(), moduleNodes.end());
+    std::vector<juce::AudioProcessorGraph::Node::Ptr> reordered;
+    reordered.reserve(moduleNodes.size());
+
+    for (const auto& name : savedOrder)
+    {
+        auto it = std::find_if(remaining.begin(), remaining.end(),
+                               [&name](const juce::AudioProcessorGraph::Node::Ptr& node)
+                               {
+                                   return node != nullptr
+                                       && node->getProcessor() != nullptr
+                                       && node->getProcessor()->getName() == name;
+                               });
+
+        if (it != remaining.end())
+        {
+            reordered.push_back(*it);
+            remaining.erase(it);
+        }
+    }
+
+    reordered.insert(reordered.end(), remaining.begin(), remaining.end());
+    moduleNodes = std::move(reordered);
+    updateGraphConnections();
+    notifyGraphChanged();
+}
+
+void OxygenAudioProcessor::notifyGraphChanged()
+{
+    if (graphChangedCallback)
+        graphChangedCallback();
+}
+
+juce::AudioBuffer<float> OxygenAudioProcessor::buildAssistantAnalysisBuffer()
+{
+    juce::AudioBuffer<float> analysisBuffer;
+    const juce::SpinLock::ScopedLockType historyLock(assistantHistoryLock);
+
+    if (assistantHistoryNumValidSamples <= 0)
+        return analysisBuffer;
+
+    analysisBuffer.setSize(2, assistantHistoryNumValidSamples);
+    const int startPosition = (assistantHistoryWritePosition - assistantHistoryNumValidSamples + assistantHistoryCapacity)
+                            % assistantHistoryCapacity;
+
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        if (startPosition + assistantHistoryNumValidSamples <= assistantHistoryCapacity)
+        {
+            analysisBuffer.copyFrom(channel, 0,
+                                    assistantHistoryBuffer, channel, startPosition,
+                                    assistantHistoryNumValidSamples);
+        }
+        else
+        {
+            const int firstBlockSize = assistantHistoryCapacity - startPosition;
+            const int secondBlockSize = assistantHistoryNumValidSamples - firstBlockSize;
+
+            analysisBuffer.copyFrom(channel, 0,
+                                    assistantHistoryBuffer, channel, startPosition,
+                                    firstBlockSize);
+            analysisBuffer.copyFrom(channel, firstBlockSize,
+                                    assistantHistoryBuffer, channel, 0,
+                                    secondBlockSize);
+        }
+    }
+
+    return analysisBuffer;
 }
 
 // This creates new instances of the plugin..

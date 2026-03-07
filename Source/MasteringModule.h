@@ -20,22 +20,28 @@ namespace oxygen
 
         const juce::String getName() const override { return moduleName; }
 
-        void prepareToPlay(double sampleRate, int samplesPerBlock) override {}
+        void prepareToPlay(double sampleRate, int samplesPerBlock) override
+        {
+            juce::ignoreUnused(sampleRate, samplesPerBlock);
+        }
         void releaseResources() override {}
 
         bool isBusesLayoutSupported(const BusesLayout& layouts) const override
         {
-            if (layouts.getMainOutputChannelSet() == juce::AudioChannelSet::mono())
-                return true;
-            if (layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo())
-                return true;
-            return false;
+            const auto inputLayout = layouts.getMainInputChannelSet();
+            const auto outputLayout = layouts.getMainOutputChannelSet();
+
+            if (inputLayout != outputLayout)
+                return false;
+
+            return outputLayout == juce::AudioChannelSet::mono()
+                || outputLayout == juce::AudioChannelSet::stereo();
         }
 
         // Subclasses must implement processBlock
         void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override = 0;
 
-        virtual juce::RangedAudioParameter* getBypassParameter() const { return nullptr; }
+        juce::RangedAudioParameter* getBypassParameter() const override { return nullptr; }
 
         // Editor support defaults (can be overridden)
         bool hasEditor() const override { return false; }

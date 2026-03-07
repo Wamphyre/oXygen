@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "AudioBufferQueue.h"
+#include <functional>
 
 namespace oxygen
 {
@@ -8,7 +9,7 @@ namespace oxygen
                              public juce::Timer
     {
     public:
-        SpectrumAnalyzer(AudioBufferQueue& queueToUse);
+        SpectrumAnalyzer(AudioBufferQueue& queueToUse, std::function<double()> sampleRateProviderToUse);
         ~SpectrumAnalyzer() override;
 
         void paint(juce::Graphics& g) override;
@@ -23,6 +24,7 @@ namespace oxygen
         juce::dsp::WindowingFunction<float> window { fftSize, juce::dsp::WindowingFunction<float>::hann };
         
         AudioBufferQueue& audioQueue;
+        std::function<double()> sampleRateProvider;
         std::array<float, fftSize * 2> fifo;
         std::array<float, fftSize * 2> fftData;
         

@@ -16,7 +16,9 @@ public:
     void resized() override;
     void timerCallback() override;
     
-    void drawMeterValue(juce::Graphics& g, float level, int x, int y, int w);
+    void drawStereoMeterValue(juce::Graphics& g, float leftLevel, float rightLevel, int x, int y, int w);
+    void drawBranding(juce::Graphics& g, juce::Rectangle<float> area);
+    juce::String formatLevelText(float level) const;
     
 private:
     OxygenAudioProcessor& audioProcessor;
@@ -28,10 +30,13 @@ private:
     std::unique_ptr<ModuleRack> moduleRack;
     
     // SVG Assets
-    std::unique_ptr<juce::Drawable> logoDrawable;
     std::unique_ptr<juce::Drawable> iconDrawable;
     
-    std::unique_ptr<juce::DrawableButton> aiMasterButton;
+    std::unique_ptr<juce::DrawableButton> masterAssistButton;
+    juce::Label genreLabel;
+    juce::Label directionLabel;
+    juce::ComboBox genreBox;
+    juce::ComboBox directionBox;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

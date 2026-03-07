@@ -1,5 +1,7 @@
 #include "EqualizerModule.h"
 #include "../GUI/EqualizerEditor.h"
+#include <cmath>
+#include <limits>
 
 namespace oxygen
 {
@@ -11,7 +13,7 @@ namespace oxygen
         for (int i = 0; i < NumBands; ++i)
         {
             filters.push_back(std::make_unique<Filter>());
-            lastGains[i] = 0.0f;
+            lastGains[i] = std::numeric_limits<float>::quiet_NaN();
         }
     }
 
@@ -55,6 +57,8 @@ namespace oxygen
             filter->prepare(spec);
             filter->reset();
         }
+
+        lastSampleRate = 0.0;
         updateFilters();
     }
 
@@ -75,40 +79,33 @@ namespace oxygen
     
     void EqualizerModule::updateFilters()
     {
+        const auto currentSampleRate = getSampleRate();
+        if (currentSampleRate <= 0.0)
+            return;
+
+        const bool sampleRateChanged = std::abs(currentSampleRate - lastSampleRate) > 1.0e-6;
+        const float maxFreq = (float) currentSampleRate * 0.45f;
+        if (maxFreq <= 20.0f)
+            return;
+
         for (int i = 0; i < NumBands; ++i)
         {
             float gainDb = apvts.getRawParameterValue("Gain" + juce::String(i))->load();
             
             // Optimization: Only update if changed (epsilon check)
-            if (std::abs(gainDb - lastGains[i]) > 0.01f)
+            if (sampleRateChanged || !std::isfinite(lastGains[i]) || std::abs(gainDb - lastGains[i]) > 0.01f)
             {
                 lastGains[i] = gainDb;
-                float gain = juce::Decibels::decibelsToGain(gainDb);
-                float q = 1.41f; // Standard Octave Q
-                
-                // Safety check for valid values
-                // Nyquist check: Frequency must be < SampleRate / 2
-                float maxFreq = (float)getSampleRate() * 0.49f;
+                const float gain = std::isfinite(gainDb) ? juce::Decibels::decibelsToGain(gainDb) : 1.0f;
+                const float q = 1.41f; // Standard Octave Q
+                const float safeFreq = juce::jlimit(20.0f, maxFreq, Frequencies[i]);
 
-                if (std::isfinite(gain) && gain > 0.0f && Frequencies[i] < maxFreq) 
-                {
-                   auto coeffs = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(getSampleRate(), Frequencies[i], q, gain);
-                   if (!std::isnan(coeffs.coefficients[0])) // Basic check
-                       *filters[i]->coefficients = coeffs;
-                }
-                else
-                {
-                    // If frequency is too high or invalid, set to unity gain (pass-through)
-                    // or keeps previous if we don't update. 
-                    // Better to set to unity to avoid artifacts if sample rate changed?
-                    // Actually, if we just don't update, it might hold garbage if initialized wrong.
-                    // But makePeakFilter might crash.
-                    // Let's create a flat filter.
-                    // *filters[i]->coefficients = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(getSampleRate(), Frequencies[i], 0.1f, 1.0f);
-                    // Checking bounds is enough to prevent the crash in makePeakFilter usually.
-                }
+                auto coeffs = juce::dsp::IIR::Coefficients<float>::makePeakFilter(currentSampleRate, safeFreq, q, gain);
+                *filters[i]->state = *coeffs;
             }
         }
+
+        lastSampleRate = currentSampleRate;
     }
 
     juce::AudioProcessorEditor* EqualizerModule::createEditor()

@@ -3,8 +3,9 @@
 
 namespace oxygen
 {
-    SpectrumAnalyzer::SpectrumAnalyzer(AudioBufferQueue& queueToUse)
-        : audioQueue(queueToUse)
+    SpectrumAnalyzer::SpectrumAnalyzer(AudioBufferQueue& queueToUse, std::function<double()> sampleRateProviderToUse)
+        : audioQueue(queueToUse),
+          sampleRateProvider(std::move(sampleRateProviderToUse))
     {
         startTimerHz(30); // 30 FPS update
     }
@@ -55,13 +56,15 @@ namespace oxygen
         juce::Path spectrumPath;
         bool started = false;
         
-        const float sampleRate = 44100.0f; // Simplified, ideally get from processor
+        const float sampleRate = (sampleRateProvider != nullptr) ? (float) sampleRateProvider() : 44100.0f;
         const float minFreq = 20.0f;
-        const float maxFreq = 20000.0f;
+        const float maxFreq = juce::jmax(minFreq * 2.0f, juce::jmin(20000.0f, sampleRate * 0.5f));
         
         for (int i = 1; i < fftSize / 2; ++i)
         {
             float freq = (float)i * (sampleRate / (float)fftSize);
+            if (freq < minFreq || freq > maxFreq)
+                continue;
             
             // Logarithmic mapping for X
             float x = juce::jmap(std::log10(freq), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);

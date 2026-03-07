@@ -11,7 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(APPLE)
     message(STATUS "🍏 Detected System: macOS")
     # macOS Specific Optimizations
-    add_compile_options(-O3 -ffast-math -march=native -funroll-loops -flto)
+    add_compile_options(-O3 -march=native -funroll-loops -flto)
     
 elseif(MSVC)
     message(STATUS "🪟 Detected System: Windows (MSVC)")
@@ -21,7 +21,7 @@ elseif(MSVC)
 elseif(UNIX AND NOT APPLE)
     message(STATUS "🐧 Detected System: Linux/Unix")
     # Linux Specific Optimizations
-    add_compile_options(-O3 -ffast-math -march=native)
+    add_compile_options(-O3 -march=native)
     
 endif()
 

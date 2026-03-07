@@ -24,47 +24,41 @@ namespace oxygen
         juce::RangedAudioParameter* getBypassParameter() const override { return apvts.getParameter("Bypass"); }
 
     private:
-        // DSP Objects
-        // 3 Crossovers to create 4 bands
-        // Tree structure:
-        //                  Input
-        //                    |
-        //                  [LP/HP @ MidHigh Freq]
-        //                  /   \
-        //            LowPath    HighPath
-        //              |            |
-        // [LP/HP @ LowMid Freq]  [LP/HP @ High Freq]
-        //      /      \             /      \
-        //    Low    LowMid       HighMid   High
-        
         using Filter = juce::dsp::LinkwitzRileyFilter<float>;
-        using Compressor = juce::dsp::Compressor<float>;
+
+        struct BandParams
+        {
+            float thresh = -10.0f;
+            float ratio = 2.0f;
+            float attack = 10.0f;
+            float release = 100.0f;
+        };
+
+        struct BandRuntimeState
+        {
+            float thresholdGain = 1.0f;
+            float ratioInverse = 1.0f;
+            float attackCoeff = 0.0f;
+            float releaseCoeff = 0.0f;
+            float envelope = 0.0f;
+        };
         
         Filter crossoverLowMid;
         Filter crossoverMidHigh;
         Filter crossoverHigh;
-        
-        // We need 2 filters for each crossover split per channel? 
-        // No, LinkwitzRileyFilter::processSample returns both LP and HP outputs.
-        // But LinkwitzRileyFilter maintains state per channel internally if configured correctly?
-        // Actually LinkwitzRileyFilter is usually mono or multi-channel handling in process(). 
-        // processSample takes a channel index.
-        
-        Compressor compressorLow;
-        Compressor compressorLowMid;
-        Compressor compressorHighMid;
-        Compressor compressorHigh;
-        
+
         // Temporary buffers for bands
         juce::AudioBuffer<float> bufferLow, bufferLowMid, bufferHighMid, bufferHigh;
         
         // Parameter caching for optimization
         float lastLowMidX = -1.0f, lastMidHighX = -1.0f, lastHighX = -1.0f;
-        struct BandParams { float thresh, ratio, attack, release; };
         std::array<BandParams, 4> lastBandParams;
+        std::array<BandRuntimeState, 4> bandRuntimeStates;
+        double lastSampleRate = 0.0;
         
         // Helper to update parameters
         void updateParameters();
+        void processStereoLinkedBand(juce::AudioBuffer<float>& bandBuffer, BandRuntimeState& state);
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MultibandCompressorModule)
     };

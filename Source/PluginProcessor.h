@@ -3,6 +3,8 @@
 #include <JuceHeader.h>
 #include "AI/InferenceEngine.h"
 #include "GUI/AudioBufferQueue.h"
+#include <functional>
+#include <vector>
 
 //==============================================================================
 /**
@@ -16,8 +18,10 @@ public:
     
     oxygen::AudioBufferQueue& getAudioBufferQueue() { return audioBufferQueue; }
 
-    float getInputLevel() const { return inputLevel.load(); }
-    float getOutputLevel() const { return outputLevel.load(); }
+    float getInputLevel() const { return juce::jmax(inputLevelL.load(), inputLevelR.load()); }
+    float getOutputLevel() const { return juce::jmax(outputLevelL.load(), outputLevelR.load()); }
+    float getInputLevel(int channel) const;
+    float getOutputLevel(int channel) const;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -50,8 +54,6 @@ private:
     
     // Visualizer Data Source
     oxygen::AudioBufferQueue audioBufferQueue;
-    std::atomic<float> inputLevel { 0.0f };
-    std::atomic<float> outputLevel { 0.0f };
 
     // AI Engine
     std::unique_ptr<oxygen::InferenceEngine> inferenceEngine;
@@ -67,13 +69,44 @@ public:
     void moveModuleDown(int index);
     const std::vector<juce::AudioProcessorGraph::Node::Ptr>& getModuleNodes() const { return moduleNodes; }
 
-    void triggerAutoMastering();
+    void triggerMasterAssistant();
+    void setGraphChangedCallback(std::function<void()> callback);
+    oxygen::AssistantGenre getAssistantGenre() const;
+    oxygen::ArtisticDirection getArtisticDirection() const;
+    void setAssistantGenre(oxygen::AssistantGenre genre);
+    void setArtisticDirection(oxygen::ArtisticDirection direction);
 
 private:
     std::vector<juce::AudioProcessorGraph::Node::Ptr> moduleNodes;
     
     juce::AudioProcessorGraph::Node::Ptr audioInputNode;
     juce::AudioProcessorGraph::Node::Ptr audioOutputNode;
+    std::atomic<float> inputLevelL { 0.0f };
+    std::atomic<float> inputLevelR { 0.0f };
+    std::atomic<float> outputLevelL { 0.0f };
+    std::atomic<float> outputLevelR { 0.0f };
+    std::vector<float> analyzerScratchBuffer;
+    juce::AudioBuffer<float> assistantHistoryBuffer;
+    mutable juce::SpinLock assistantHistoryLock;
+    int assistantHistoryWritePosition = 0;
+    int assistantHistoryNumValidSamples = 0;
+    int assistantHistoryCapacity = 32768;
+    int assistantHistoryDecimationFactor = 1;
+    int assistantDownsampleCounter = 0;
+    float assistantDownsampleAccumL = 0.0f;
+    float assistantDownsampleAccumR = 0.0f;
+    double assistantHistorySampleRate = 44100.0;
+    oxygen::AssistantGenre assistantGenre = oxygen::AssistantGenre::Universal;
+    oxygen::ArtisticDirection artisticDirection = oxygen::ArtisticDirection::Balanced;
+    std::function<void()> graphChangedCallback;
+
+    juce::StringArray getCurrentModuleOrder() const;
+    void applyModuleOrder(const juce::StringArray& savedOrder);
+    void notifyGraphChanged();
+    juce::AudioBuffer<float> buildAssistantAnalysisBuffer();
+
+    static constexpr double assistantAnalysisWindowSeconds = 256.0;
+    static constexpr double assistantTargetSampleRate = 24000.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OxygenAudioProcessor)
 };

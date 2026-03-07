@@ -24,12 +24,20 @@ namespace oxygen
         juce::RangedAudioParameter* getBypassParameter() const override { return apvts.getParameter("Bypass"); }
 
     private:
-        juce::dsp::Limiter<float> limiter;
-        
         float lastThreshold = -100.0f, lastRelease = -1.0f, lastCeiling = -100.0f;
-        float currentMakeupGain = 1.0f;
+        float currentInputDrive = 1.0f;
+        float currentCeilingGain = 1.0f;
+        float releaseCoeff = 0.0f;
+        float currentGain = 1.0f;
+        int lookaheadSamples = 0;
+        int delayWritePosition = 0;
+        double currentSampleRate = 44100.0;
+        juce::AudioBuffer<float> delayBuffer;
+        std::vector<float> gainReductionBuffer;
+        std::vector<float> previousDrivenSamples;
         
         void updateParameters();
+        void resetLimiterState();
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MaximizerModule)
     };

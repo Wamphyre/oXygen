@@ -1,8 +1,34 @@
 #include "MaximizerModule.h"
 #include "../GUI/MaximizerEditor.h"
+#include <cmath>
 
 namespace oxygen
 {
+    namespace
+    {
+        constexpr float lookaheadTimeMs = 5.0f;
+
+        float computeReleaseCoefficient(double sampleRate, float releaseMs)
+        {
+            if (sampleRate <= 0.0 || releaseMs <= 0.0f)
+                return 0.0f;
+
+            return std::exp(-1.0f / (0.001f * releaseMs * (float) sampleRate));
+        }
+
+        float estimateInterpolatedPeak(float previousSample, float currentSample)
+        {
+            const float quarter = (0.75f * previousSample) + (0.25f * currentSample);
+            const float midpoint = 0.5f * (previousSample + currentSample);
+            const float threeQuarter = (0.25f * previousSample) + (0.75f * currentSample);
+
+            return juce::jmax(std::abs(currentSample),
+                              std::abs(quarter),
+                              std::abs(midpoint),
+                              std::abs(threeQuarter));
+        }
+    }
+
 
     MaximizerModule::MaximizerModule()
         : MasteringModule("Maximizer"),
@@ -32,12 +58,14 @@ namespace oxygen
 
     void MaximizerModule::prepareToPlay(double sampleRate, int samplesPerBlock)
     {
-        juce::dsp::ProcessSpec spec;
-        spec.sampleRate = sampleRate;
-        spec.maximumBlockSize = samplesPerBlock;
-        spec.numChannels = getTotalNumOutputChannels();
-
-        limiter.prepare(spec);
+        juce::ignoreUnused(samplesPerBlock);
+        currentSampleRate = sampleRate;
+        lookaheadSamples = juce::jmax(1, juce::roundToInt((sampleRate * lookaheadTimeMs) / 1000.0));
+        const int bufferSize = lookaheadSamples + 1;
+        delayBuffer.setSize(getTotalNumOutputChannels(), bufferSize);
+        gainReductionBuffer.assign((size_t) bufferSize, 1.0f);
+        previousDrivenSamples.assign((size_t) getTotalNumOutputChannels(), 0.0f);
+        resetLimiterState();
         updateParameters();
     }
 
@@ -48,58 +76,104 @@ namespace oxygen
 
         updateParameters();
         
-        juce::dsp::AudioBlock<float> block(buffer);
-        juce::dsp::ProcessContextReplacing<float> context(block);
-
-        // 1. Soft Clip / Saturation (Ozone-like "Tube" or "IRC" emulation)
-        // Adds harmonics and reduces peakiness before the hard wall limiter
-        // This allows for louder perceived volume.
         const int numChannels = buffer.getNumChannels();
         const int numSamples = buffer.getNumSamples();
-        
+        if (numChannels == 0 || numSamples == 0)
+            return;
+
+        if (delayBuffer.getNumChannels() != numChannels || delayBuffer.getNumSamples() != lookaheadSamples + 1)
+        {
+            delayBuffer.setSize(numChannels, lookaheadSamples + 1);
+            gainReductionBuffer.assign((size_t) (lookaheadSamples + 1), 1.0f);
+            previousDrivenSamples.assign((size_t) numChannels, 0.0f);
+            resetLimiterState();
+        }
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            float detectorPeak = 0.0f;
+            for (int channel = 0; channel < numChannels; ++channel)
+            {
+                const float drivenSample = buffer.getSample(channel, sample) * currentInputDrive;
+                delayBuffer.setSample(channel, delayWritePosition, drivenSample);
+                detectorPeak = juce::jmax(detectorPeak,
+                                          estimateInterpolatedPeak(previousDrivenSamples[(size_t) channel], drivenSample));
+                previousDrivenSamples[(size_t) channel] = drivenSample;
+            }
+
+            const float targetGain = (detectorPeak > currentCeilingGain && detectorPeak > 0.0f)
+                                   ? (currentCeilingGain / detectorPeak)
+                                   : 1.0f;
+            gainReductionBuffer[(size_t) delayWritePosition] = juce::jlimit(0.0f, 1.0f, targetGain);
+
+            const int readPosition = (delayWritePosition + 1) % delayBuffer.getNumSamples();
+
+            float windowGain = 1.0f;
+            for (const float bufferedGain : gainReductionBuffer)
+                windowGain = juce::jmin(windowGain, bufferedGain);
+
+            if (windowGain < currentGain)
+                currentGain = windowGain;
+            else
+                currentGain = windowGain + (currentGain - windowGain) * releaseCoeff;
+
+            for (int channel = 0; channel < numChannels; ++channel)
+            {
+                float outputSample = delayBuffer.getSample(channel, readPosition) * currentGain;
+                if (!std::isfinite(outputSample))
+                    outputSample = 0.0f;
+
+                buffer.setSample(channel, sample, outputSample);
+            }
+
+            delayWritePosition = readPosition;
+        }
+
         for (int ch = 0; ch < numChannels; ++ch)
         {
             auto* data = buffer.getWritePointer(ch);
             for (int i = 0; i < numSamples; ++i)
             {
-                // Simple Tanh Soft Clipper with slight drive
-                // data[i] = std::tanh(data[i]); 
-                // We can be more sophisticated:
-                float x = data[i];
-                if (x < -1.5f) x = -1.5f;
-                else if (x > 1.5f) x = 1.5f;
-                
-                // Soft knee
-                // Polynomial or Tanh. Tanh is classic.
-                data[i] = std::tanh(x); 
+                if (!std::isfinite(data[i]))
+                    data[i] = 0.0f;
             }
         }
-
-        // 2. Hard Limiting
-        limiter.process(context);
-        
-        // 3. Apply Make-up Gain (Ceiling)
-        // Optimization: Use vector op
-        buffer.applyGain(currentMakeupGain);
     }
     
     void MaximizerModule::updateParameters()
     {
-        float thresh = apvts.getRawParameterValue("Threshold")->load();
-        float rel = apvts.getRawParameterValue("Release")->load();
-        float ceil = apvts.getRawParameterValue("Ceiling")->load();
+        const float thresh = juce::jlimit(-60.0f, 0.0f, apvts.getRawParameterValue("Threshold")->load());
+        const float rel = juce::jlimit(1.0f, 500.0f, apvts.getRawParameterValue("Release")->load());
+        const float ceil = juce::jlimit(-60.0f, 0.0f, apvts.getRawParameterValue("Ceiling")->load());
 
-        if (thresh == lastThreshold && rel == lastRelease && ceil == lastCeiling)
+        if (std::abs(thresh - lastThreshold) <= 0.001f
+            && std::abs(rel - lastRelease) <= 0.001f
+            && std::abs(ceil - lastCeiling) <= 0.001f)
             return;
 
         lastThreshold = thresh;
         lastRelease = rel;
         lastCeiling = ceil;
 
-        limiter.setThreshold(thresh);
-        limiter.setRelease(rel);
-        // Note: juce::dsp::Limiter doesn't have a direct "Ceiling" parameter.
-        // In a full implementation, we might apply output gain or drive input gain.
+        currentInputDrive = juce::Decibels::decibelsToGain(-thresh);
+        currentCeilingGain = juce::Decibels::decibelsToGain(ceil);
+        releaseCoeff = computeReleaseCoefficient(currentSampleRate, rel);
+
+        if (!std::isfinite(currentInputDrive))
+            currentInputDrive = 1.0f;
+        if (!std::isfinite(currentCeilingGain))
+            currentCeilingGain = 1.0f;
+        if (!std::isfinite(releaseCoeff))
+            releaseCoeff = 0.0f;
+    }
+
+    void MaximizerModule::resetLimiterState()
+    {
+        delayBuffer.clear();
+        std::fill(gainReductionBuffer.begin(), gainReductionBuffer.end(), 1.0f);
+        std::fill(previousDrivenSamples.begin(), previousDrivenSamples.end(), 0.0f);
+        currentGain = 1.0f;
+        delayWritePosition = 0;
     }
 
     juce::AudioProcessorEditor* MaximizerModule::createEditor()

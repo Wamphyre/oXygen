@@ -11,11 +11,25 @@
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
+    <filter id="typeGlow" x="-30%" y="-50%" width="180%" height="220%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8" result="blurCyan"/>
+      <feFlood flood-color="#00FFFF" flood-opacity="0.55" result="cyanFlood"/>
+      <feComposite in="cyanFlood" in2="blurCyan" operator="in" result="cyanGlow"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14" result="blurMagenta"/>
+      <feFlood flood-color="#FF00FF" flood-opacity="0.35" result="magentaFlood"/>
+      <feComposite in="magentaFlood" in2="blurMagenta" operator="in" result="magentaGlow"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2.5" result="blurWhite"/>
+      <feFlood flood-color="#FFFFFF" flood-opacity="0.40" result="whiteFlood"/>
+      <feComposite in="whiteFlood" in2="blurWhite" operator="in" result="whiteGlow"/>
+      <feMerge>
+        <feMergeNode in="magentaGlow"/>
+        <feMergeNode in="cyanGlow"/>
+        <feMergeNode in="whiteGlow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
-  
-  <!-- Background -->
-  <rect width="800" height="300" fill="#121212" rx="15" ry="15"/>
-  
+
   <!-- Logo Icon X -->
   <g transform="translate(100, 150) scale(1.5)" filter="url(#glow)">
     <path d="M-30,-30 L30,30 M-30,30 L30,-30" stroke="url(#neonGrad)" stroke-width="8" stroke-linecap="round" />
@@ -24,8 +38,8 @@
   </g>
   
   <!-- Text -->
-  <text x="220" y="180" font-family="Arial, sans-serif" font-size="120" font-weight="bold" fill="white" letter-spacing="5">
+  <text x="220" y="180" font-family="Arial, sans-serif" font-size="120" font-weight="bold" fill="white" letter-spacing="5" filter="url(#typeGlow)">
     o<tspan fill="url(#neonGrad)">X</tspan>ygen
   </text>
-  <text x="225" y="230" font-family="Arial, sans-serif" font-size="24" fill="#888888" letter-spacing="8">MASTERING SUITE</text>
+  <text x="225" y="230" font-family="Arial, sans-serif" font-size="24" fill="#CFCFCF" letter-spacing="8" filter="url(#typeGlow)">MASTERING SUITE</text>
 </svg>

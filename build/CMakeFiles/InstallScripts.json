@@ -1,0 +1,11 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/salva/Documents/GitHub/oXygen/build/cmake_install.cmake",
+		"/Users/salva/Documents/GitHub/oXygen/build/_deps/juce-build/cmake_install.cmake",
+		"/Users/salva/Documents/GitHub/oXygen/build/_deps/juce-build/modules/cmake_install.cmake",
+		"/Users/salva/Documents/GitHub/oXygen/build/_deps/juce-build/extras/Build/cmake_install.cmake",
+		"/Users/salva/Documents/GitHub/oXygen/build/_deps/juce-build/extras/Build/juceaide/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
