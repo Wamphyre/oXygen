@@ -1,1 +1,0 @@
-/usr/bin/c++ -flto=thin -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/boo.dir/main.cpp.o -o boo  libfoo.a

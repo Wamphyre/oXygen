@@ -6,6 +6,7 @@
 #include "Modules/MaximizerModule.h"
 #include "Modules/StereoImagerModule.h"
 #include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -41,6 +42,11 @@ namespace
             return 0.0f;
 
         return buffer.getMagnitude(channel, 0, buffer.getNumSamples());
+    }
+
+    float scaleFromDefault(float defaultsValue, float targetValue, float amount)
+    {
+        return defaultsValue + ((targetValue - defaultsValue) * amount);
     }
 }
 
@@ -133,16 +139,13 @@ void OxygenAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
 
     {
         const juce::SpinLock::ScopedLockType historyLock(assistantHistoryLock);
-        assistantHistoryDecimationFactor = juce::jmax(1, juce::roundToInt(sampleRate / assistantTargetSampleRate));
-        assistantHistorySampleRate = sampleRate / (double) assistantHistoryDecimationFactor;
+        assistantHistorySampleRate = sampleRate;
         assistantHistoryCapacity = juce::jmax(4096, juce::roundToInt(assistantHistorySampleRate * assistantAnalysisWindowSeconds));
         assistantHistoryBuffer.setSize(2, assistantHistoryCapacity);
         assistantHistoryBuffer.clear();
         assistantHistoryWritePosition = 0;
         assistantHistoryNumValidSamples = 0;
-        assistantDownsampleCounter = 0;
-        assistantDownsampleAccumL = 0.0f;
-        assistantDownsampleAccumR = 0.0f;
+        assistantCapturePeak = 0.0f;
     }
     
     // Refresh connections to match the new layout
@@ -192,24 +195,15 @@ void OxygenAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
             for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
             {
-                assistantDownsampleAccumL += left[sample];
-                assistantDownsampleAccumR += right[sample];
-                ++assistantDownsampleCounter;
+                const float storedL = left[sample];
+                const float storedR = right[sample];
 
-                if (assistantDownsampleCounter >= assistantHistoryDecimationFactor)
-                {
-                    const float storedL = assistantDownsampleAccumL / (float) assistantDownsampleCounter;
-                    const float storedR = assistantDownsampleAccumR / (float) assistantDownsampleCounter;
-
-                    assistantHistoryBuffer.setSample(0, assistantHistoryWritePosition, storedL);
-                    assistantHistoryBuffer.setSample(1, assistantHistoryWritePosition, storedR);
-                    assistantHistoryWritePosition = (assistantHistoryWritePosition + 1) % assistantHistoryCapacity;
-                    assistantHistoryNumValidSamples = juce::jmin(assistantHistoryNumValidSamples + 1,
-                                                                 assistantHistoryCapacity);
-                    assistantDownsampleCounter = 0;
-                    assistantDownsampleAccumL = 0.0f;
-                    assistantDownsampleAccumR = 0.0f;
-                }
+                assistantHistoryBuffer.setSample(0, assistantHistoryWritePosition, storedL);
+                assistantHistoryBuffer.setSample(1, assistantHistoryWritePosition, storedR);
+                assistantCapturePeak = juce::jmax(assistantCapturePeak, std::abs(storedL), std::abs(storedR));
+                assistantHistoryWritePosition = (assistantHistoryWritePosition + 1) % assistantHistoryCapacity;
+                assistantHistoryNumValidSamples = juce::jmin(assistantHistoryNumValidSamples + 1,
+                                                             assistantHistoryCapacity);
             }
         }
     }
@@ -336,15 +330,51 @@ void OxygenAudioProcessor::moveModuleDown(int index)
     }
 }
 
-void OxygenAudioProcessor::triggerMasterAssistant()
+bool OxygenAudioProcessor::triggerMasterAssistant()
 {
-    auto analysisBuffer = buildAssistantAnalysisBuffer();
-    const auto params = (inferenceEngine != nullptr)
-                      ? inferenceEngine->predict(analysisBuffer,
-                                                 assistantHistorySampleRate,
-                                                 { assistantGenre, artisticDirection })
-                      : oxygen::MasteringParameters {};
+    oxygen::MasteringParameters params;
+    if (!createMasterAssistantSuggestion(params))
+        return false;
 
+    return applyMasterAssistantSuggestion(params, getAssistantIntensity());
+}
+
+bool OxygenAudioProcessor::createMasterAssistantSuggestion(oxygen::MasteringParameters& params)
+{
+    const float minSignalGain = juce::Decibels::decibelsToGain(assistantMinSignalDb);
+    float capturedPeak = 0.0f;
+    {
+        const juce::SpinLock::ScopedLockType historyLock(assistantHistoryLock);
+        capturedPeak = assistantCapturePeak;
+    }
+
+    if (capturedPeak < minSignalGain)
+        return false;
+
+    auto analysisBuffer = buildAssistantAnalysisBuffer();
+    if (analysisBuffer.getNumSamples() < 1024)
+        return false;
+
+    params = (inferenceEngine != nullptr)
+           ? inferenceEngine->predict(analysisBuffer, assistantHistorySampleRate)
+           : oxygen::MasteringParameters {};
+
+    return true;
+}
+
+bool OxygenAudioProcessor::applyMasterAssistantSuggestion(const oxygen::MasteringParameters& suggestion,
+                                                          AssistantIntensity intensity)
+{
+    auto params = suggestion;
+    setAssistantIntensity(intensity);
+    applyAssistantIntensity(params, intensity);
+    applyMasteringParameters(params);
+
+    return true;
+}
+
+void OxygenAudioProcessor::applyMasteringParameters(const oxygen::MasteringParameters& params)
+{
     for (auto& node : mainProcessorGraph->getNodes())
     {
         if (auto* processor = node->getProcessor())
@@ -435,9 +465,8 @@ juce::AudioProcessorEditor* OxygenAudioProcessor::createEditor()
 void OxygenAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree root(pluginStateType);
-    root.setProperty("version", 1, nullptr);
-    root.setProperty("assistantGenre", (int) assistantGenre, nullptr);
-    root.setProperty("artisticDirection", (int) artisticDirection, nullptr);
+    root.setProperty("version", 2, nullptr);
+    root.setProperty("assistantIntensity", assistantIntensityIndex.load(), nullptr);
 
     juce::ValueTree moduleOrder(moduleOrderStateType);
     for (const auto& name : getCurrentModuleOrder())
@@ -476,11 +505,8 @@ void OxygenAudioProcessor::setStateInformation (const void* data, int sizeInByte
     if (!root.isValid() || !root.hasType(pluginStateType))
         return;
 
-    if (root.hasProperty("assistantGenre"))
-        assistantGenre = (oxygen::AssistantGenre) (int) root.getProperty("assistantGenre");
-
-    if (root.hasProperty("artisticDirection"))
-        artisticDirection = (oxygen::ArtisticDirection) (int) root.getProperty("artisticDirection");
+    if (root.hasProperty("assistantIntensity"))
+        setAssistantIntensity(static_cast<AssistantIntensity>((int) root.getProperty("assistantIntensity")));
 
     if (auto orderState = root.getChildWithName(moduleOrderStateType); orderState.isValid())
     {
@@ -524,24 +550,86 @@ float OxygenAudioProcessor::getOutputLevel(int channel) const
     return (channel <= 0) ? outputLevelL.load() : outputLevelR.load();
 }
 
-oxygen::AssistantGenre OxygenAudioProcessor::getAssistantGenre() const
+void OxygenAudioProcessor::resetAssistantAnalysisCapture()
 {
-    return assistantGenre;
+    const juce::SpinLock::ScopedLockType historyLock(assistantHistoryLock);
+    assistantHistoryBuffer.clear();
+    assistantHistoryWritePosition = 0;
+    assistantHistoryNumValidSamples = 0;
+    assistantCapturePeak = 0.0f;
 }
 
-oxygen::ArtisticDirection OxygenAudioProcessor::getArtisticDirection() const
+bool OxygenAudioProcessor::hasAssistantCapturedSignal() const
 {
-    return artisticDirection;
+    const juce::SpinLock::ScopedLockType historyLock(assistantHistoryLock);
+    return assistantCapturePeak >= juce::Decibels::decibelsToGain(assistantMinSignalDb);
 }
 
-void OxygenAudioProcessor::setAssistantGenre(oxygen::AssistantGenre genre)
+void OxygenAudioProcessor::setAssistantIntensity(AssistantIntensity intensity)
 {
-    assistantGenre = genre;
+    const int index = juce::jlimit(0, 2, static_cast<int>(intensity));
+    assistantIntensityIndex.store(index);
 }
 
-void OxygenAudioProcessor::setArtisticDirection(oxygen::ArtisticDirection direction)
+OxygenAudioProcessor::AssistantIntensity OxygenAudioProcessor::getAssistantIntensity() const
 {
-    artisticDirection = direction;
+    const int index = juce::jlimit(0, 2, assistantIntensityIndex.load());
+    return static_cast<AssistantIntensity>(index);
+}
+
+void OxygenAudioProcessor::applyAssistantIntensity(oxygen::MasteringParameters& params, AssistantIntensity intensity) const
+{
+    const oxygen::MasteringParameters defaults {};
+
+    float amount = 1.0f;
+    switch (intensity)
+    {
+        case AssistantIntensity::Soft: amount = 0.72f; break;
+        case AssistantIntensity::Standard: amount = 1.0f; break;
+        case AssistantIntensity::Hard: amount = 1.28f; break;
+    }
+
+    for (int band = 0; band < oxygen::MasteringParameters::eqBandCount; ++band)
+    {
+        const float scaled = scaleFromDefault(defaults.eqBandGains[(size_t) band],
+                                              params.eqBandGains[(size_t) band],
+                                              amount);
+        params.eqBandGains[(size_t) band] = juce::jlimit(-12.0f, 12.0f, scaled);
+    }
+
+    params.lowMidX = juce::jlimit(20.0f, 1000.0f, scaleFromDefault(defaults.lowMidX, params.lowMidX, amount));
+    params.midHighX = juce::jlimit(500.0f, 5000.0f, scaleFromDefault(defaults.midHighX, params.midHighX, amount));
+    params.highX = juce::jlimit(2000.0f, 15000.0f, scaleFromDefault(defaults.highX, params.highX, amount));
+
+    params.lowThresh = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.lowThresh, params.lowThresh, amount));
+    params.lowRatio = juce::jlimit(1.0f, 20.0f, scaleFromDefault(defaults.lowRatio, params.lowRatio, amount));
+    params.lowAttack = juce::jlimit(0.1f, 100.0f, scaleFromDefault(defaults.lowAttack, params.lowAttack, amount));
+    params.lowRelease = juce::jlimit(10.0f, 1000.0f, scaleFromDefault(defaults.lowRelease, params.lowRelease, amount));
+
+    params.lowMidThresh = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.lowMidThresh, params.lowMidThresh, amount));
+    params.lowMidRatio = juce::jlimit(1.0f, 20.0f, scaleFromDefault(defaults.lowMidRatio, params.lowMidRatio, amount));
+    params.lowMidAttack = juce::jlimit(0.1f, 100.0f, scaleFromDefault(defaults.lowMidAttack, params.lowMidAttack, amount));
+    params.lowMidRelease = juce::jlimit(10.0f, 1000.0f, scaleFromDefault(defaults.lowMidRelease, params.lowMidRelease, amount));
+
+    params.highMidThresh = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.highMidThresh, params.highMidThresh, amount));
+    params.highMidRatio = juce::jlimit(1.0f, 20.0f, scaleFromDefault(defaults.highMidRatio, params.highMidRatio, amount));
+    params.highMidAttack = juce::jlimit(0.1f, 100.0f, scaleFromDefault(defaults.highMidAttack, params.highMidAttack, amount));
+    params.highMidRelease = juce::jlimit(10.0f, 1000.0f, scaleFromDefault(defaults.highMidRelease, params.highMidRelease, amount));
+
+    params.highThresh = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.highThresh, params.highThresh, amount));
+    params.highRatio = juce::jlimit(1.0f, 20.0f, scaleFromDefault(defaults.highRatio, params.highRatio, amount));
+    params.highAttack = juce::jlimit(0.1f, 100.0f, scaleFromDefault(defaults.highAttack, params.highAttack, amount));
+    params.highRelease = juce::jlimit(10.0f, 1000.0f, scaleFromDefault(defaults.highRelease, params.highRelease, amount));
+
+    params.lowWidth = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.lowWidth, params.lowWidth, amount));
+    params.lowMidWidth = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.lowMidWidth, params.lowMidWidth, amount));
+    params.highMidWidth = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.highMidWidth, params.highMidWidth, amount));
+    params.highWidth = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.highWidth, params.highWidth, amount));
+
+    params.outputGain = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.outputGain, params.outputGain, amount));
+    params.maximizerThreshold = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.maximizerThreshold, params.maximizerThreshold, amount));
+    params.maximizerCeiling = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.maximizerCeiling, params.maximizerCeiling, amount));
+    params.maximizerRelease = juce::jlimit(1.0f, 500.0f, scaleFromDefault(defaults.maximizerRelease, params.maximizerRelease, amount));
 }
 
 void OxygenAudioProcessor::setGraphChangedCallback(std::function<void()> callback)

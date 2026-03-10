@@ -12,6 +12,13 @@
 class OxygenAudioProcessor  : public juce::AudioProcessor
 {
 public:
+    enum class AssistantIntensity
+    {
+        Soft = 0,
+        Standard,
+        Hard
+    };
+
     //==============================================================================
     OxygenAudioProcessor();
     ~OxygenAudioProcessor() override;
@@ -69,12 +76,15 @@ public:
     void moveModuleDown(int index);
     const std::vector<juce::AudioProcessorGraph::Node::Ptr>& getModuleNodes() const { return moduleNodes; }
 
-    void triggerMasterAssistant();
+    bool triggerMasterAssistant();
+    bool createMasterAssistantSuggestion(oxygen::MasteringParameters& params);
+    bool applyMasterAssistantSuggestion(const oxygen::MasteringParameters& params,
+                                       AssistantIntensity intensity);
+    void resetAssistantAnalysisCapture();
+    bool hasAssistantCapturedSignal() const;
+    void setAssistantIntensity(AssistantIntensity intensity);
+    AssistantIntensity getAssistantIntensity() const;
     void setGraphChangedCallback(std::function<void()> callback);
-    oxygen::AssistantGenre getAssistantGenre() const;
-    oxygen::ArtisticDirection getArtisticDirection() const;
-    void setAssistantGenre(oxygen::AssistantGenre genre);
-    void setArtisticDirection(oxygen::ArtisticDirection direction);
 
 private:
     std::vector<juce::AudioProcessorGraph::Node::Ptr> moduleNodes;
@@ -91,22 +101,20 @@ private:
     int assistantHistoryWritePosition = 0;
     int assistantHistoryNumValidSamples = 0;
     int assistantHistoryCapacity = 32768;
-    int assistantHistoryDecimationFactor = 1;
-    int assistantDownsampleCounter = 0;
-    float assistantDownsampleAccumL = 0.0f;
-    float assistantDownsampleAccumR = 0.0f;
+    float assistantCapturePeak = 0.0f;
     double assistantHistorySampleRate = 44100.0;
-    oxygen::AssistantGenre assistantGenre = oxygen::AssistantGenre::Universal;
-    oxygen::ArtisticDirection artisticDirection = oxygen::ArtisticDirection::Balanced;
     std::function<void()> graphChangedCallback;
 
     juce::StringArray getCurrentModuleOrder() const;
     void applyModuleOrder(const juce::StringArray& savedOrder);
     void notifyGraphChanged();
+    void applyMasteringParameters(const oxygen::MasteringParameters& params);
+    void applyAssistantIntensity(oxygen::MasteringParameters& params, AssistantIntensity intensity) const;
     juce::AudioBuffer<float> buildAssistantAnalysisBuffer();
 
-    static constexpr double assistantAnalysisWindowSeconds = 256.0;
-    static constexpr double assistantTargetSampleRate = 24000.0;
+    static constexpr double assistantAnalysisWindowSeconds = 60.0;
+    static constexpr float assistantMinSignalDb = -55.0f;
+    std::atomic<int> assistantIntensityIndex { static_cast<int>(AssistantIntensity::Standard) };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OxygenAudioProcessor)
 };

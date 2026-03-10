@@ -10,14 +10,27 @@ namespace
 {
     constexpr int headerHeight = 96;
 
-    int comboIdForGenre(oxygen::AssistantGenre genre)
+    int intensityToComboId(OxygenAudioProcessor::AssistantIntensity intensity)
     {
-        return 1 + (int) genre;
+        switch (intensity)
+        {
+            case OxygenAudioProcessor::AssistantIntensity::Soft: return 1;
+            case OxygenAudioProcessor::AssistantIntensity::Standard: return 2;
+            case OxygenAudioProcessor::AssistantIntensity::Hard: return 3;
+        }
+
+        return 2;
     }
 
-    int comboIdForDirection(oxygen::ArtisticDirection direction)
+    OxygenAudioProcessor::AssistantIntensity intensityFromComboId(int id)
     {
-        return 1 + (int) direction;
+        switch (id)
+        {
+            case 1: return OxygenAudioProcessor::AssistantIntensity::Soft;
+            case 2: return OxygenAudioProcessor::AssistantIntensity::Standard;
+            case 3: return OxygenAudioProcessor::AssistantIntensity::Hard;
+            default: return OxygenAudioProcessor::AssistantIntensity::Standard;
+        }
     }
 }
 
@@ -55,45 +68,27 @@ MainComponent::MainComponent(OxygenAudioProcessor& p)
     }
     masterAssistButton->setButtonText("MASTER ASSIST");
     masterAssistButton->setColour(juce::TextButton::textColourOnId, juce::Colours::cyan);
-    masterAssistButton->onClick = [this] { audioProcessor.triggerMasterAssistant(); };
+    masterAssistButton->onClick = [this]
+    {
+        startAssistantListening();
+    };
     addAndMakeVisible(masterAssistButton.get());
 
-    genreLabel.setText("GENRE", juce::dontSendNotification);
-    genreLabel.setColour(juce::Label::textColourId, Theme::Colors::OnSurfaceVariant);
-    genreLabel.setFont(Theme::Fonts::getBody().withHeight(11.0f));
-    addAndMakeVisible(genreLabel);
+    assistantIntensityLabel.setText("INTENSITY", juce::dontSendNotification);
+    assistantIntensityLabel.setColour(juce::Label::textColourId, oxygen::Theme::Colors::OnSurfaceVariant);
+    assistantIntensityLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(assistantIntensityLabel);
 
-    genreBox.addItem("Universal", comboIdForGenre(AssistantGenre::Universal));
-    genreBox.addItem("Pop", comboIdForGenre(AssistantGenre::Pop));
-    genreBox.addItem("Hip Hop", comboIdForGenre(AssistantGenre::HipHop));
-    genreBox.addItem("Electronic", comboIdForGenre(AssistantGenre::Electronic));
-    genreBox.addItem("Rock", comboIdForGenre(AssistantGenre::Rock));
-    genreBox.addItem("Acoustic", comboIdForGenre(AssistantGenre::Acoustic));
-    genreBox.addItem("Orchestral", comboIdForGenre(AssistantGenre::Orchestral));
-    genreBox.setSelectedId(comboIdForGenre(audioProcessor.getAssistantGenre()), juce::dontSendNotification);
-    genreBox.onChange = [this]
+    assistantIntensityBox.addItem("Soft", 1);
+    assistantIntensityBox.addItem("Standard", 2);
+    assistantIntensityBox.addItem("Hard", 3);
+    assistantIntensityBox.setSelectedId(intensityToComboId(audioProcessor.getAssistantIntensity()),
+                                        juce::dontSendNotification);
+    assistantIntensityBox.onChange = [this]
     {
-        audioProcessor.setAssistantGenre((AssistantGenre) juce::jmax(0, genreBox.getSelectedId() - 1));
+        audioProcessor.setAssistantIntensity(intensityFromComboId(assistantIntensityBox.getSelectedId()));
     };
-    addAndMakeVisible(genreBox);
-
-    directionLabel.setText("DIRECTION", juce::dontSendNotification);
-    directionLabel.setColour(juce::Label::textColourId, Theme::Colors::OnSurfaceVariant);
-    directionLabel.setFont(Theme::Fonts::getBody().withHeight(11.0f));
-    addAndMakeVisible(directionLabel);
-
-    directionBox.addItem("Balanced", comboIdForDirection(ArtisticDirection::Balanced));
-    directionBox.addItem("Transparent", comboIdForDirection(ArtisticDirection::Transparent));
-    directionBox.addItem("Warm", comboIdForDirection(ArtisticDirection::Warm));
-    directionBox.addItem("Punchy", comboIdForDirection(ArtisticDirection::Punchy));
-    directionBox.addItem("Wide", comboIdForDirection(ArtisticDirection::Wide));
-    directionBox.addItem("Aggressive", comboIdForDirection(ArtisticDirection::Aggressive));
-    directionBox.setSelectedId(comboIdForDirection(audioProcessor.getArtisticDirection()), juce::dontSendNotification);
-    directionBox.onChange = [this]
-    {
-        audioProcessor.setArtisticDirection((ArtisticDirection) juce::jmax(0, directionBox.getSelectedId() - 1));
-    };
-    addAndMakeVisible(directionBox);
+    addAndMakeVisible(assistantIntensityBox);
     
     setSize(1100, 1000); // Increased default size for better visibility
     startTimerHz(60);   // Smoother 60fps update
@@ -101,6 +96,7 @@ MainComponent::MainComponent(OxygenAudioProcessor& p)
 
 MainComponent::~MainComponent()
 {
+    cancelAssistantListening();
     stopTimer();
     audioProcessor.setGraphChangedCallback({});
 }
@@ -111,6 +107,19 @@ void MainComponent::timerCallback()
     inputMeterR.setLevel(audioProcessor.getInputLevel(1));
     outputMeterL.setLevel(audioProcessor.getOutputLevel(0));
     outputMeterR.setLevel(audioProcessor.getOutputLevel(1));
+
+    if (assistantUiState == AssistantUiState::listening)
+    {
+        const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+        const auto elapsedMs = nowMs - assistantListenStartMs;
+        assistantListenProgress = juce::jlimit(0.0, 1.0, elapsedMs / assistantListenDurationMs);
+
+        if (assistantListenWindow != nullptr)
+            assistantListenWindow->repaint();
+
+        if (assistantListenProgress >= 1.0)
+            completeAssistantListening();
+    }
 }
 
 void MainComponent::resized()
@@ -120,24 +129,16 @@ void MainComponent::resized()
     // Header
     auto headerArea = area.removeFromTop(headerHeight);
     
-    auto controlsArea = headerArea.removeFromRight(540).reduced(6, 8);
-
-    if (masterAssistButton.get())
+    if (masterAssistButton.get() != nullptr)
     {
-        auto buttonArea = controlsArea.removeFromRight(180).reduced(5, 2);
+        auto buttonArea = headerArea.removeFromRight(190).reduced(6, 10);
         masterAssistButton->setBounds(buttonArea);
     }
 
-    auto directionArea = controlsArea.removeFromRight(170).reduced(6, 2);
-    auto genreArea = controlsArea.removeFromRight(160).reduced(6, 2);
-
-    auto genreLabelArea = genreArea.removeFromTop(16);
-    genreLabel.setBounds(genreLabelArea);
-    genreBox.setBounds(genreArea.reduced(0, 2));
-
-    auto directionLabelArea = directionArea.removeFromTop(16);
-    directionLabel.setBounds(directionLabelArea);
-    directionBox.setBounds(directionArea.reduced(0, 2));
+    auto intensityArea = headerArea.removeFromRight(170).reduced(6, 10);
+    auto intensityLabelArea = intensityArea.removeFromTop(18);
+    assistantIntensityLabel.setBounds(intensityLabelArea);
+    assistantIntensityBox.setBounds(intensityArea);
     
     // Spectrum Analyzer (Top 120px - Slightly more compact)
     auto visualizerArea = area.removeFromTop(120).reduced(10, 5);
@@ -228,6 +229,173 @@ juce::String MainComponent::formatLevelText(float level) const
 {
     const float db = juce::Decibels::gainToDecibels(level);
     return (db < -60.0f) ? "-inf" : juce::String(db, 1) + " dB";
+}
+
+void MainComponent::startAssistantListening()
+{
+    if (assistantUiState != AssistantUiState::idle)
+        return;
+
+    closeAssistantListenWindow();
+
+    audioProcessor.resetAssistantAnalysisCapture();
+    assistantUiState = AssistantUiState::listening;
+    assistantListenProgress = 0.0;
+    assistantListenStartMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (masterAssistButton != nullptr)
+    {
+        masterAssistButton->setButtonText("LISTENING...");
+        masterAssistButton->setEnabled(false);
+    }
+    assistantIntensityBox.setEnabled(false);
+
+    auto* listenWindow = new juce::AlertWindow("Master Assistant Listening",
+                                               "The plugin is listening to your mix.\n"
+                                               "Volume may increase after processing.\n"
+                                               "If no signal is detected, play the loudest section of your mix.",
+                                               juce::AlertWindow::InfoIcon);
+    listenWindow->addProgressBarComponent(assistantListenProgress);
+    listenWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    listenWindow->setAlwaysOnTop(true);
+    listenWindow->centreAroundComponent(this, 520, 210);
+
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+    listenWindow->enterModalState(true,
+                                  juce::ModalCallbackFunction::create([safeThis](int result)
+                                  {
+                                      if (safeThis == nullptr)
+                                          return;
+
+                                      if (safeThis->assistantUiState == AssistantUiState::listening && result == 0)
+                                          safeThis->cancelAssistantListening();
+                                  }),
+                                  true);
+    assistantListenWindow = listenWindow;
+}
+
+void MainComponent::cancelAssistantListening()
+{
+    assistantUiState = AssistantUiState::idle;
+    assistantListenProgress = 0.0;
+    assistantListenStartMs = 0.0;
+
+    if (masterAssistButton != nullptr)
+    {
+        masterAssistButton->setButtonText("MASTER ASSIST");
+        masterAssistButton->setEnabled(true);
+    }
+    assistantIntensityBox.setEnabled(true);
+    pendingAssistantParameters.reset();
+
+    closeAssistantListenWindow();
+}
+
+void MainComponent::completeAssistantListening()
+{
+    if (assistantUiState != AssistantUiState::listening)
+        return;
+
+    assistantUiState = AssistantUiState::idle;
+
+    if (masterAssistButton != nullptr)
+    {
+        masterAssistButton->setButtonText("MASTER ASSIST");
+        masterAssistButton->setEnabled(true);
+    }
+    assistantIntensityBox.setEnabled(true);
+
+    closeAssistantListenWindow();
+
+    if (!audioProcessor.hasAssistantCapturedSignal())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "Master Assistant",
+                                               "No audio signal was detected.\n"
+                                               "Play the loudest section of your mix and try again.");
+        return;
+    }
+
+    oxygen::MasteringParameters suggestion;
+    if (!audioProcessor.createMasterAssistantSuggestion(suggestion))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "Master Assistant",
+                                               "Unable to build the mastering suggestion.\n"
+                                               "Try listening again with a stronger signal.");
+        return;
+    }
+
+    pendingAssistantParameters = suggestion;
+
+    showAssistantApplyConfirmation();
+}
+
+void MainComponent::showAssistantApplyConfirmation()
+{
+    if (!pendingAssistantParameters.has_value())
+        return;
+
+    auto* confirmationWindow = new juce::AlertWindow("Master Assistant",
+                                                     "Analysis complete.\n"
+                                                     "Choose intensity and apply the mastering settings.",
+                                                     juce::AlertWindow::QuestionIcon);
+
+    auto* intensityBox = new juce::ComboBox();
+    intensityBox->addItem("Soft", 1);
+    intensityBox->addItem("Standard", 2);
+    intensityBox->addItem("Hard", 3);
+    intensityBox->setSelectedId(intensityToComboId(audioProcessor.getAssistantIntensity()),
+                                juce::dontSendNotification);
+    confirmationWindow->addCustomComponent(intensityBox);
+    confirmationWindow->addButton("Apply", 1);
+    confirmationWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    confirmationWindow->setAlwaysOnTop(true);
+    confirmationWindow->centreAroundComponent(this, 420, 220);
+
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+    juce::Component::SafePointer<juce::ComboBox> safeIntensityBox(intensityBox);
+    confirmationWindow->enterModalState(true,
+                                        juce::ModalCallbackFunction::create([safeThis, safeIntensityBox](int result)
+                                        {
+                                            if (safeThis == nullptr)
+                                                return;
+
+                                            if (result == 1 && safeThis->pendingAssistantParameters.has_value())
+                                            {
+                                                const auto intensity = intensityFromComboId(safeIntensityBox != nullptr
+                                                                                                ? safeIntensityBox->getSelectedId()
+                                                                                                : 2);
+                                                safeThis->assistantIntensityBox.setSelectedId(intensityToComboId(intensity),
+                                                                                             juce::dontSendNotification);
+                                                safeThis->audioProcessor.setAssistantIntensity(intensity);
+                                                if (!safeThis->audioProcessor.applyMasterAssistantSuggestion(*safeThis->pendingAssistantParameters,
+                                                                                                             intensity))
+                                                {
+                                                    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                                                           "Master Assistant",
+                                                                                           "Unable to apply settings.\n"
+                                                                                           "No valid audio profile is available.");
+                                                }
+                                            }
+
+                                            safeThis->pendingAssistantParameters.reset();
+                                        }),
+                                        true);
+}
+
+void MainComponent::closeAssistantListenWindow()
+{
+    auto* listenWindow = assistantListenWindow.getComponent();
+    assistantListenWindow = nullptr;
+
+    if (listenWindow == nullptr)
+        return;
+
+    if (listenWindow->isCurrentlyModal())
+        listenWindow->exitModalState(0);
+    else
+        delete listenWindow;
 }
 
 void MainComponent::drawBranding(juce::Graphics& g, juce::Rectangle<float> area)

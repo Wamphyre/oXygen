@@ -15,8 +15,12 @@ namespace oxygen
         Universal = 0,
         Pop,
         HipHop,
+        Trap,
         Electronic,
         Rock,
+        BlackMetal,
+        DeathMetal,
+        BrutalDeathMetal,
         Acoustic,
         Orchestral
     };
