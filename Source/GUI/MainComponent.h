@@ -18,7 +18,10 @@ public:
     void resized() override;
     void timerCallback() override;
     
-    void drawStereoMeterValue(juce::Graphics& g, float leftLevel, float rightLevel, int x, int y, int w);
+    void drawStereoMeterValue(juce::Graphics& g,
+                              float leftLevel,
+                              float rightLevel,
+                              juce::Rectangle<int> bounds);
     void drawBranding(juce::Graphics& g, juce::Rectangle<float> area);
     juce::String formatLevelText(float level) const;
     void startAssistantListening();
@@ -46,8 +49,6 @@ private:
     std::unique_ptr<juce::Drawable> iconDrawable;
     
     std::unique_ptr<juce::DrawableButton> masterAssistButton;
-    juce::Label assistantIntensityLabel;
-    juce::ComboBox assistantIntensityBox;
     AssistantUiState assistantUiState = AssistantUiState::idle;
     double assistantListenProgress = 0.0;
     double assistantListenStartMs = 0.0;

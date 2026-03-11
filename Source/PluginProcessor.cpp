@@ -44,10 +44,47 @@ namespace
         return buffer.getMagnitude(channel, 0, buffer.getNumSamples());
     }
 
-    float scaleFromDefault(float defaultsValue, float targetValue, float amount)
+    float getChannelMagnitude(const juce::AudioBuffer<double>& buffer, int channel)
     {
-        return defaultsValue + ((targetValue - defaultsValue) * amount);
+        if (channel < 0 || channel >= buffer.getNumChannels() || buffer.getNumSamples() == 0)
+            return 0.0f;
+
+        return (float) buffer.getMagnitude(channel, 0, buffer.getNumSamples());
     }
+
+    template <typename SampleType>
+    void writeAssistantHistory(juce::AudioBuffer<float>& assistantHistoryBuffer,
+                               juce::SpinLock& assistantHistoryLock,
+                               int& assistantHistoryWritePosition,
+                               int& assistantHistoryNumValidSamples,
+                               int assistantHistoryCapacity,
+                               float& assistantCapturePeak,
+                               const juce::AudioBuffer<SampleType>& buffer)
+    {
+        if (buffer.getNumChannels() == 0)
+            return;
+
+        const juce::SpinLock::ScopedTryLockType historyLock(assistantHistoryLock);
+        if (!historyLock.isLocked())
+            return;
+
+        const auto* left = buffer.getReadPointer(0);
+        const auto* right = (buffer.getNumChannels() > 1) ? buffer.getReadPointer(1) : left;
+
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        {
+            const float storedL = (float) left[sample];
+            const float storedR = (float) right[sample];
+
+            assistantHistoryBuffer.setSample(0, assistantHistoryWritePosition, storedL);
+            assistantHistoryBuffer.setSample(1, assistantHistoryWritePosition, storedR);
+            assistantCapturePeak = juce::jmax(assistantCapturePeak, std::abs(storedL), std::abs(storedR));
+            assistantHistoryWritePosition = (assistantHistoryWritePosition + 1) % assistantHistoryCapacity;
+            assistantHistoryNumValidSamples = juce::jmin(assistantHistoryNumValidSamples + 1,
+                                                         assistantHistoryCapacity);
+        }
+    }
+
 }
 
 using namespace oxygen;
@@ -132,6 +169,7 @@ void OxygenAudioProcessor::changeProgramName (int index, const juce::String& new
 
 void OxygenAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    mainProcessorGraph->setProcessingPrecision(getProcessingPrecision());
     mainProcessorGraph->setPlayConfigDetails(getMainBusNumInputChannels(),
                                              getMainBusNumOutputChannels(),
                                              sampleRate, samplesPerBlock);
@@ -147,9 +185,13 @@ void OxygenAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
         assistantHistoryNumValidSamples = 0;
         assistantCapturePeak = 0.0f;
     }
+
+    inputAudioBufferQueue.clear();
+    outputAudioBufferQueue.clear();
     
     // Refresh connections to match the new layout
     updateGraphConnections();
+    setLatencySamples(mainProcessorGraph->getLatencySamples());
 }
 
 void OxygenAudioProcessor::releaseResources()
@@ -185,33 +227,21 @@ void OxygenAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    if (buffer.getNumChannels() > 0)
-    {
-        const juce::SpinLock::ScopedTryLockType historyLock(assistantHistoryLock);
-        if (historyLock.isLocked())
-        {
-            const auto* left = buffer.getReadPointer(0);
-            const auto* right = (buffer.getNumChannels() > 1) ? buffer.getReadPointer(1) : left;
-
-            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
-            {
-                const float storedL = left[sample];
-                const float storedR = right[sample];
-
-                assistantHistoryBuffer.setSample(0, assistantHistoryWritePosition, storedL);
-                assistantHistoryBuffer.setSample(1, assistantHistoryWritePosition, storedR);
-                assistantCapturePeak = juce::jmax(assistantCapturePeak, std::abs(storedL), std::abs(storedR));
-                assistantHistoryWritePosition = (assistantHistoryWritePosition + 1) % assistantHistoryCapacity;
-                assistantHistoryNumValidSamples = juce::jmin(assistantHistoryNumValidSamples + 1,
-                                                             assistantHistoryCapacity);
-            }
-        }
-    }
+    writeAssistantHistory(assistantHistoryBuffer,
+                          assistantHistoryLock,
+                          assistantHistoryWritePosition,
+                          assistantHistoryNumValidSamples,
+                          assistantHistoryCapacity,
+                          assistantCapturePeak,
+                          buffer);
 
     const float inL = getChannelMagnitude(buffer, 0);
     const float inR = (buffer.getNumChannels() > 1) ? getChannelMagnitude(buffer, 1) : inL;
     inputLevelL.store(inL);
     inputLevelR.store(inR);
+
+    if (buffer.getNumChannels() > 0)
+        inputAudioBufferQueue.push(buffer);
 
     // Process audio through the graph
     mainProcessorGraph->processBlock(buffer, midiMessages);
@@ -223,26 +253,43 @@ void OxygenAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     // Feed the analyser with a mono sum of the processed output.
     if (buffer.getNumChannels() > 0)
-    {
-        analyzerScratchBuffer.resize((size_t) buffer.getNumSamples());
+        outputAudioBufferQueue.push(buffer);
+}
 
-        if (buffer.getNumChannels() == 1)
-        {
-            juce::FloatVectorOperations::copy(analyzerScratchBuffer.data(),
-                                              buffer.getReadPointer(0),
-                                              buffer.getNumSamples());
-        }
-        else
-        {
-            const auto* left = buffer.getReadPointer(0);
-            const auto* right = buffer.getReadPointer(1);
+void OxygenAudioProcessor::processBlock (juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midiMessages)
+{
+    juce::ScopedNoDenormals noDenormals;
+    auto totalNumInputChannels  = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
-                analyzerScratchBuffer[(size_t) sample] = 0.5f * (left[sample] + right[sample]);
-        }
+    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+        buffer.clear(i, 0, buffer.getNumSamples());
 
-        audioBufferQueue.push(analyzerScratchBuffer.data(), buffer.getNumSamples());
-    }
+    writeAssistantHistory(assistantHistoryBuffer,
+                          assistantHistoryLock,
+                          assistantHistoryWritePosition,
+                          assistantHistoryNumValidSamples,
+                          assistantHistoryCapacity,
+                          assistantCapturePeak,
+                          buffer);
+
+    const float inL = getChannelMagnitude(buffer, 0);
+    const float inR = (buffer.getNumChannels() > 1) ? getChannelMagnitude(buffer, 1) : inL;
+    inputLevelL.store(inL);
+    inputLevelR.store(inR);
+
+    if (buffer.getNumChannels() > 0)
+        inputAudioBufferQueue.push(buffer);
+
+    mainProcessorGraph->processBlock(buffer, midiMessages);
+
+    const float outL = getChannelMagnitude(buffer, 0);
+    const float outR = (buffer.getNumChannels() > 1) ? getChannelMagnitude(buffer, 1) : outL;
+    outputLevelL.store(outL);
+    outputLevelR.store(outR);
+
+    if (buffer.getNumChannels() > 0)
+        outputAudioBufferQueue.push(buffer);
 }
 
 void OxygenAudioProcessor::initialiseGraph()
@@ -287,6 +334,7 @@ void OxygenAudioProcessor::updateGraphConnections()
     {
         for (int channel = 0; channel < numChannelsToProcess; ++channel)
             addConnectionIfLegal(audioInputNode->nodeID, channel, audioOutputNode->nodeID, channel);
+        setLatencySamples(mainProcessorGraph->getLatencySamples());
         return;
     }
 
@@ -308,6 +356,8 @@ void OxygenAudioProcessor::updateGraphConnections()
     // Connect Last Module -> Output
     for (int channel = 0; channel < numChannelsToProcess; ++channel)
         addConnectionIfLegal(moduleNodes.back()->nodeID, channel, audioOutputNode->nodeID, channel);
+
+    setLatencySamples(mainProcessorGraph->getLatencySamples());
 }
 
 void OxygenAudioProcessor::moveModuleUp(int index)
@@ -336,7 +386,7 @@ bool OxygenAudioProcessor::triggerMasterAssistant()
     if (!createMasterAssistantSuggestion(params))
         return false;
 
-    return applyMasterAssistantSuggestion(params, getAssistantIntensity());
+    return applyMasterAssistantSuggestion(params);
 }
 
 bool OxygenAudioProcessor::createMasterAssistantSuggestion(oxygen::MasteringParameters& params)
@@ -362,13 +412,9 @@ bool OxygenAudioProcessor::createMasterAssistantSuggestion(oxygen::MasteringPara
     return true;
 }
 
-bool OxygenAudioProcessor::applyMasterAssistantSuggestion(const oxygen::MasteringParameters& suggestion,
-                                                          AssistantIntensity intensity)
+bool OxygenAudioProcessor::applyMasterAssistantSuggestion(const oxygen::MasteringParameters& suggestion)
 {
-    auto params = suggestion;
-    setAssistantIntensity(intensity);
-    applyAssistantIntensity(params, intensity);
-    applyMasteringParameters(params);
+    applyMasteringParameters(suggestion);
 
     return true;
 }
@@ -466,7 +512,6 @@ void OxygenAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree root(pluginStateType);
     root.setProperty("version", 2, nullptr);
-    root.setProperty("assistantIntensity", assistantIntensityIndex.load(), nullptr);
 
     juce::ValueTree moduleOrder(moduleOrderStateType);
     for (const auto& name : getCurrentModuleOrder())
@@ -504,9 +549,6 @@ void OxygenAudioProcessor::setStateInformation (const void* data, int sizeInByte
     const auto root = juce::ValueTree::fromXml(*xmlState);
     if (!root.isValid() || !root.hasType(pluginStateType))
         return;
-
-    if (root.hasProperty("assistantIntensity"))
-        setAssistantIntensity(static_cast<AssistantIntensity>((int) root.getProperty("assistantIntensity")));
 
     if (auto orderState = root.getChildWithName(moduleOrderStateType); orderState.isValid())
     {
@@ -563,73 +605,6 @@ bool OxygenAudioProcessor::hasAssistantCapturedSignal() const
 {
     const juce::SpinLock::ScopedLockType historyLock(assistantHistoryLock);
     return assistantCapturePeak >= juce::Decibels::decibelsToGain(assistantMinSignalDb);
-}
-
-void OxygenAudioProcessor::setAssistantIntensity(AssistantIntensity intensity)
-{
-    const int index = juce::jlimit(0, 2, static_cast<int>(intensity));
-    assistantIntensityIndex.store(index);
-}
-
-OxygenAudioProcessor::AssistantIntensity OxygenAudioProcessor::getAssistantIntensity() const
-{
-    const int index = juce::jlimit(0, 2, assistantIntensityIndex.load());
-    return static_cast<AssistantIntensity>(index);
-}
-
-void OxygenAudioProcessor::applyAssistantIntensity(oxygen::MasteringParameters& params, AssistantIntensity intensity) const
-{
-    const oxygen::MasteringParameters defaults {};
-
-    float amount = 1.0f;
-    switch (intensity)
-    {
-        case AssistantIntensity::Soft: amount = 0.72f; break;
-        case AssistantIntensity::Standard: amount = 1.0f; break;
-        case AssistantIntensity::Hard: amount = 1.28f; break;
-    }
-
-    for (int band = 0; band < oxygen::MasteringParameters::eqBandCount; ++band)
-    {
-        const float scaled = scaleFromDefault(defaults.eqBandGains[(size_t) band],
-                                              params.eqBandGains[(size_t) band],
-                                              amount);
-        params.eqBandGains[(size_t) band] = juce::jlimit(-12.0f, 12.0f, scaled);
-    }
-
-    params.lowMidX = juce::jlimit(20.0f, 1000.0f, scaleFromDefault(defaults.lowMidX, params.lowMidX, amount));
-    params.midHighX = juce::jlimit(500.0f, 5000.0f, scaleFromDefault(defaults.midHighX, params.midHighX, amount));
-    params.highX = juce::jlimit(2000.0f, 15000.0f, scaleFromDefault(defaults.highX, params.highX, amount));
-
-    params.lowThresh = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.lowThresh, params.lowThresh, amount));
-    params.lowRatio = juce::jlimit(1.0f, 20.0f, scaleFromDefault(defaults.lowRatio, params.lowRatio, amount));
-    params.lowAttack = juce::jlimit(0.1f, 100.0f, scaleFromDefault(defaults.lowAttack, params.lowAttack, amount));
-    params.lowRelease = juce::jlimit(10.0f, 1000.0f, scaleFromDefault(defaults.lowRelease, params.lowRelease, amount));
-
-    params.lowMidThresh = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.lowMidThresh, params.lowMidThresh, amount));
-    params.lowMidRatio = juce::jlimit(1.0f, 20.0f, scaleFromDefault(defaults.lowMidRatio, params.lowMidRatio, amount));
-    params.lowMidAttack = juce::jlimit(0.1f, 100.0f, scaleFromDefault(defaults.lowMidAttack, params.lowMidAttack, amount));
-    params.lowMidRelease = juce::jlimit(10.0f, 1000.0f, scaleFromDefault(defaults.lowMidRelease, params.lowMidRelease, amount));
-
-    params.highMidThresh = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.highMidThresh, params.highMidThresh, amount));
-    params.highMidRatio = juce::jlimit(1.0f, 20.0f, scaleFromDefault(defaults.highMidRatio, params.highMidRatio, amount));
-    params.highMidAttack = juce::jlimit(0.1f, 100.0f, scaleFromDefault(defaults.highMidAttack, params.highMidAttack, amount));
-    params.highMidRelease = juce::jlimit(10.0f, 1000.0f, scaleFromDefault(defaults.highMidRelease, params.highMidRelease, amount));
-
-    params.highThresh = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.highThresh, params.highThresh, amount));
-    params.highRatio = juce::jlimit(1.0f, 20.0f, scaleFromDefault(defaults.highRatio, params.highRatio, amount));
-    params.highAttack = juce::jlimit(0.1f, 100.0f, scaleFromDefault(defaults.highAttack, params.highAttack, amount));
-    params.highRelease = juce::jlimit(10.0f, 1000.0f, scaleFromDefault(defaults.highRelease, params.highRelease, amount));
-
-    params.lowWidth = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.lowWidth, params.lowWidth, amount));
-    params.lowMidWidth = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.lowMidWidth, params.lowMidWidth, amount));
-    params.highMidWidth = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.highMidWidth, params.highMidWidth, amount));
-    params.highWidth = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.highWidth, params.highWidth, amount));
-
-    params.outputGain = juce::jlimit(0.0f, 2.0f, scaleFromDefault(defaults.outputGain, params.outputGain, amount));
-    params.maximizerThreshold = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.maximizerThreshold, params.maximizerThreshold, amount));
-    params.maximizerCeiling = juce::jlimit(-60.0f, 0.0f, scaleFromDefault(defaults.maximizerCeiling, params.maximizerCeiling, amount));
-    params.maximizerRelease = juce::jlimit(1.0f, 500.0f, scaleFromDefault(defaults.maximizerRelease, params.maximizerRelease, amount));
 }
 
 void OxygenAudioProcessor::setGraphChangedCallback(std::function<void()> callback)

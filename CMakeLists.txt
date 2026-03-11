@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(oXygen VERSION 0.0.1)
+project(oXygen VERSION 1.0.0)
 
 # Set C++ standard
 # Set C++ standard

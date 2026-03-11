@@ -12,18 +12,11 @@
 class OxygenAudioProcessor  : public juce::AudioProcessor
 {
 public:
-    enum class AssistantIntensity
-    {
-        Soft = 0,
-        Standard,
-        Hard
-    };
-
-    //==============================================================================
     OxygenAudioProcessor();
     ~OxygenAudioProcessor() override;
     
-    oxygen::AudioBufferQueue& getAudioBufferQueue() { return audioBufferQueue; }
+    oxygen::AudioBufferQueue& getInputAudioBufferQueue() { return inputAudioBufferQueue; }
+    oxygen::AudioBufferQueue& getOutputAudioBufferQueue() { return outputAudioBufferQueue; }
 
     float getInputLevel() const { return juce::jmax(inputLevelL.load(), inputLevelR.load()); }
     float getOutputLevel() const { return juce::jmax(outputLevelL.load(), outputLevelR.load()); }
@@ -34,8 +27,10 @@ public:
     void releaseResources() override;
 
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+    bool supportsDoublePrecisionProcessing() const override { return true; }
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlock (juce::AudioBuffer<double>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
@@ -60,7 +55,8 @@ private:
     std::unique_ptr<juce::AudioProcessorGraph> mainProcessorGraph;
     
     // Visualizer Data Source
-    oxygen::AudioBufferQueue audioBufferQueue;
+    oxygen::AudioBufferQueue inputAudioBufferQueue;
+    oxygen::AudioBufferQueue outputAudioBufferQueue;
 
     // AI Engine
     std::unique_ptr<oxygen::InferenceEngine> inferenceEngine;
@@ -78,12 +74,9 @@ public:
 
     bool triggerMasterAssistant();
     bool createMasterAssistantSuggestion(oxygen::MasteringParameters& params);
-    bool applyMasterAssistantSuggestion(const oxygen::MasteringParameters& params,
-                                       AssistantIntensity intensity);
+    bool applyMasterAssistantSuggestion(const oxygen::MasteringParameters& params);
     void resetAssistantAnalysisCapture();
     bool hasAssistantCapturedSignal() const;
-    void setAssistantIntensity(AssistantIntensity intensity);
-    AssistantIntensity getAssistantIntensity() const;
     void setGraphChangedCallback(std::function<void()> callback);
 
 private:
@@ -95,7 +88,6 @@ private:
     std::atomic<float> inputLevelR { 0.0f };
     std::atomic<float> outputLevelL { 0.0f };
     std::atomic<float> outputLevelR { 0.0f };
-    std::vector<float> analyzerScratchBuffer;
     juce::AudioBuffer<float> assistantHistoryBuffer;
     mutable juce::SpinLock assistantHistoryLock;
     int assistantHistoryWritePosition = 0;
@@ -109,12 +101,10 @@ private:
     void applyModuleOrder(const juce::StringArray& savedOrder);
     void notifyGraphChanged();
     void applyMasteringParameters(const oxygen::MasteringParameters& params);
-    void applyAssistantIntensity(oxygen::MasteringParameters& params, AssistantIntensity intensity) const;
     juce::AudioBuffer<float> buildAssistantAnalysisBuffer();
 
     static constexpr double assistantAnalysisWindowSeconds = 60.0;
     static constexpr float assistantMinSignalDb = -55.0f;
-    std::atomic<int> assistantIntensityIndex { static_cast<int>(AssistantIntensity::Standard) };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OxygenAudioProcessor)
 };

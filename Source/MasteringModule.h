@@ -40,6 +40,41 @@ namespace oxygen
 
         // Subclasses must implement processBlock
         void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override = 0;
+        void processBlock(juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midiMessages) override
+        {
+            const auto numChannels = buffer.getNumChannels();
+            const auto numSamples = buffer.getNumSamples();
+            if (numChannels == 0 || numSamples == 0)
+                return;
+
+            if (doublePrecisionFallbackBuffer.getNumChannels() != numChannels
+                || doublePrecisionFallbackBuffer.getNumSamples() < numSamples)
+            {
+                doublePrecisionFallbackBuffer.setSize(numChannels, numSamples, false, false, true);
+            }
+
+            for (int channel = 0; channel < numChannels; ++channel)
+            {
+                const auto* source = buffer.getReadPointer(channel);
+                auto* destination = doublePrecisionFallbackBuffer.getWritePointer(channel);
+
+                for (int sample = 0; sample < numSamples; ++sample)
+                    destination[sample] = (float) source[sample];
+            }
+
+            processBlock(doublePrecisionFallbackBuffer, midiMessages);
+
+            for (int channel = 0; channel < numChannels; ++channel)
+            {
+                const auto* source = doublePrecisionFallbackBuffer.getReadPointer(channel);
+                auto* destination = buffer.getWritePointer(channel);
+
+                for (int sample = 0; sample < numSamples; ++sample)
+                    destination[sample] = (double) source[sample];
+            }
+        }
+
+        bool supportsDoublePrecisionProcessing() const override { return true; }
 
         juce::RangedAudioParameter* getBypassParameter() const override { return nullptr; }
 
@@ -64,6 +99,7 @@ namespace oxygen
 
     private:
         juce::String moduleName;
+        juce::AudioBuffer<float> doublePrecisionFallbackBuffer;
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MasteringModule)
     };
 

@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <numeric>
+#include <tuple>
 #include <vector>
 
 // Note: Uncomment these when ONNX Runtime is linked
@@ -27,12 +28,16 @@ namespace oxygen
             float truePeakDb = -100.0f;
             float rmsDb = -100.0f;
             float gatedRmsDb = -100.0f;
+            float integratedLufs = -100.0f;
+            float shortTermLufs = -100.0f;
             float crestDb = 0.0f;
             float lowVsMidDb = 0.0f;
             float highVsMidDb = 0.0f;
             float stereoCorrelation = 1.0f;
             float sideRatio = 0.0f;
             std::array<float, eqBandCount> eqDeviationDb {};
+            std::array<float, eqBandCount> eqExcessPersistence {};
+            std::array<float, eqBandCount> eqDeficitPersistence {};
             std::array<float, 4> bandPeakDb {};
             std::array<float, 4> bandRmsDb {};
             std::array<float, 4> bandCrestDb {};
@@ -51,36 +56,135 @@ namespace oxygen
             return 10.0f * std::log10((float) juce::jmax(meanSquare, 1.0e-12));
         }
 
-        float cubicInterpolate(float y0, float y1, float y2, float y3, float t)
+        float loudnessMeanSquareToLufs(double meanSquare)
         {
-            const float a0 = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
-            const float a1 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
-            const float a2 = -0.5f * y0 + 0.5f * y2;
-            const float a3 = y1;
-            return ((a0 * t + a1) * t + a2) * t + a3;
+            return -0.691f + meanSquareToDbSafe(meanSquare);
         }
 
-        float approximateTruePeak(const juce::AudioBuffer<float>& recentAudio, int numChannels, int numSamples)
+        std::pair<float, float> measureProgramLoudness(const juce::AudioBuffer<float>& recentAudio,
+                                                       int numChannels,
+                                                       int numSamples,
+                                                       double sampleRate)
         {
-            float peak = 0.0f;
+            using Filter = juce::dsp::IIR::Filter<double>;
+            using Coefficients = juce::dsp::IIR::Coefficients<double>;
+
+            std::array<Filter, 2> highPassFilters;
+            std::array<Filter, 2> highShelfFilters;
+
+            const auto highPassCoefficients = Coefficients::makeHighPass(sampleRate, 38.0, 0.5);
+            const auto highShelfCoefficients = Coefficients::makeHighShelf(sampleRate,
+                                                                           1500.0,
+                                                                           0.70710678,
+                                                                           juce::Decibels::decibelsToGain(4.0));
+
+            std::vector<double> weightedEnergy((size_t) numSamples, 0.0);
 
             for (int channel = 0; channel < numChannels; ++channel)
             {
-                const auto* data = recentAudio.getReadPointer(channel);
+                highPassFilters[(size_t) channel].coefficients = highPassCoefficients;
+                highShelfFilters[(size_t) channel].coefficients = highShelfCoefficients;
+                highPassFilters[(size_t) channel].reset();
+                highShelfFilters[(size_t) channel].reset();
+
+                const auto* input = recentAudio.getReadPointer(channel);
                 for (int sample = 0; sample < numSamples; ++sample)
-                    peak = juce::jmax(peak, std::abs(data[sample]));
-
-                for (int sample = 1; sample < numSamples - 2; ++sample)
                 {
-                    const float y0 = data[sample - 1];
-                    const float y1 = data[sample];
-                    const float y2 = data[sample + 1];
-                    const float y3 = data[sample + 2];
-
-                    peak = juce::jmax(peak, std::abs(cubicInterpolate(y0, y1, y2, y3, 0.25f)));
-                    peak = juce::jmax(peak, std::abs(cubicInterpolate(y0, y1, y2, y3, 0.50f)));
-                    peak = juce::jmax(peak, std::abs(cubicInterpolate(y0, y1, y2, y3, 0.75f)));
+                    const double highPassed = highPassFilters[(size_t) channel].processSample((double) input[sample]);
+                    const double weightedSample = highShelfFilters[(size_t) channel].processSample(highPassed);
+                    weightedEnergy[(size_t) sample] += weightedSample * weightedSample;
                 }
+            }
+
+            std::vector<double> prefixEnergy((size_t) numSamples + 1, 0.0);
+            for (int sample = 0; sample < numSamples; ++sample)
+                prefixEnergy[(size_t) sample + 1] = prefixEnergy[(size_t) sample] + weightedEnergy[(size_t) sample];
+
+            const int integratedWindow = juce::jmax(1, juce::roundToInt(sampleRate * 0.4));
+            const int integratedStep = juce::jmax(1, juce::roundToInt(sampleRate * 0.1));
+            const int shortTermWindow = juce::jmax(integratedWindow, juce::roundToInt(sampleRate * 3.0));
+
+            std::vector<double> gatedMeanSquares;
+            float shortTermLufs = -100.0f;
+
+            for (int start = 0; start < numSamples; start += integratedStep)
+            {
+                const int end = juce::jmin(numSamples, start + integratedWindow);
+                const int blockSize = end - start;
+                if (blockSize <= 0)
+                    break;
+
+                const double blockEnergy = prefixEnergy[(size_t) end] - prefixEnergy[(size_t) start];
+                const double blockMeanSquare = blockEnergy / (double) blockSize;
+                const float blockLufs = loudnessMeanSquareToLufs(blockMeanSquare);
+
+                if (blockLufs > -70.0f)
+                    gatedMeanSquares.push_back(blockMeanSquare);
+
+                const int shortTermEnd = juce::jmin(numSamples, start + shortTermWindow);
+                const int shortTermSize = shortTermEnd - start;
+                if (shortTermSize > 0)
+                {
+                    const double shortTermEnergy = prefixEnergy[(size_t) shortTermEnd] - prefixEnergy[(size_t) start];
+                    shortTermLufs = juce::jmax(shortTermLufs,
+                                               loudnessMeanSquareToLufs(shortTermEnergy / (double) shortTermSize));
+                }
+            }
+
+            float integratedLufs = -100.0f;
+            if (!gatedMeanSquares.empty())
+            {
+                const double ungatedMean = std::accumulate(gatedMeanSquares.begin(), gatedMeanSquares.end(), 0.0)
+                                         / (double) gatedMeanSquares.size();
+                const float relativeGateLufs = loudnessMeanSquareToLufs(ungatedMean) - 10.0f;
+
+                double integratedMean = 0.0;
+                int integratedCount = 0;
+
+                for (const double meanSquare : gatedMeanSquares)
+                {
+                    if (loudnessMeanSquareToLufs(meanSquare) >= relativeGateLufs)
+                    {
+                        integratedMean += meanSquare;
+                        ++integratedCount;
+                    }
+                }
+
+                if (integratedCount > 0)
+                    integratedLufs = loudnessMeanSquareToLufs(integratedMean / (double) integratedCount);
+                else
+                    integratedLufs = loudnessMeanSquareToLufs(ungatedMean);
+            }
+
+            return { integratedLufs, shortTermLufs };
+        }
+
+        float measureStrictTruePeak(const juce::AudioBuffer<float>& recentAudio, int numChannels, int numSamples)
+        {
+            constexpr int oversamplingFactor = 4;
+            float peak = 0.0f;
+            std::vector<float> oversampled((size_t) numSamples * oversamplingFactor + 32, 0.0f);
+
+            for (int channel = 0; channel < numChannels; ++channel)
+            {
+                juce::WindowedSincInterpolator interpolator;
+                interpolator.reset();
+
+                const auto* input = recentAudio.getReadPointer(channel);
+                for (int sample = 0; sample < numSamples; ++sample)
+                    peak = juce::jmax(peak, std::abs(input[sample]));
+
+                const int oversampledSamples = numSamples * oversamplingFactor;
+                juce::FloatVectorOperations::clear(oversampled.data(), oversampledSamples);
+                interpolator.process(1.0 / (double) oversamplingFactor,
+                                     input,
+                                     oversampled.data(),
+                                     oversampledSamples,
+                                     numSamples,
+                                     0);
+
+                for (int sample = 0; sample < oversampledSamples; ++sample)
+                    peak = juce::jmax(peak, std::abs(oversampled[(size_t) sample]));
             }
 
             return peak;
@@ -116,6 +220,27 @@ namespace oxygen
                 starts.push_back(lastStart);
 
             return starts;
+        }
+
+        std::array<float, eqBandCount> smoothBandProfile(std::array<float, eqBandCount> profile)
+        {
+            for (int pass = 0; pass < 3; ++pass)
+            {
+                const auto previous = profile;
+                for (int band = 0; band < eqBandCount; ++band)
+                {
+                    if (band == 0)
+                        profile[(size_t) band] = 0.75f * previous[(size_t) band] + 0.25f * previous[1];
+                    else if (band == eqBandCount - 1)
+                        profile[(size_t) band] = 0.75f * previous[(size_t) band] + 0.25f * previous[(size_t) band - 1];
+                    else
+                        profile[(size_t) band] = 0.2f * previous[(size_t) band - 1]
+                                               + 0.6f * previous[(size_t) band]
+                                               + 0.2f * previous[(size_t) band + 1];
+                }
+            }
+
+            return profile;
         }
 
         float clampEqGain(float gainDb)
@@ -183,10 +308,14 @@ namespace oxygen
 
             const double overallMeanSquare = (sumL2 + sumR2) / (double) (numSamples * numChannels);
             features.peakDb = gainToDbSafe(peak);
-            features.truePeakDb = gainToDbSafe(approximateTruePeak(recentAudio, numChannels, numSamples));
+            features.truePeakDb = gainToDbSafe(measureStrictTruePeak(recentAudio, numChannels, numSamples));
             features.rmsDb = meanSquareToDbSafe(overallMeanSquare);
             features.gatedRmsDb = features.rmsDb;
             features.crestDb = features.truePeakDb - features.rmsDb;
+            std::tie(features.integratedLufs, features.shortTermLufs)
+                = measureProgramLoudness(recentAudio, numChannels, numSamples, sampleRate);
+            if (features.integratedLufs > -99.0f)
+                features.gatedRmsDb = features.integratedLufs;
 
             const double correlationDenominator = std::sqrt(sumL2 * sumR2);
             if (correlationDenominator > 0.0)
@@ -195,71 +324,43 @@ namespace oxygen
             if (sumMid2 > 1.0e-12)
                 features.sideRatio = std::sqrt((float) (sumSide2 / sumMid2));
 
-            const int loudnessBlockSize = juce::jmax(1024, juce::roundToInt(sampleRate * 0.4));
-            const int loudnessStep = juce::jmax(512, loudnessBlockSize / 2);
-            std::vector<double> gatedBlocks;
-
-            for (int start = 0; start < numSamples; start += loudnessStep)
-            {
-                const int blockSize = juce::jmin(loudnessBlockSize, numSamples - start);
-                if (blockSize < loudnessBlockSize / 2 && !gatedBlocks.empty())
-                    break;
-
-                double blockEnergy = 0.0;
-                for (int sample = 0; sample < blockSize; ++sample)
-                {
-                    const float l = left[start + sample];
-                    const float r = right[start + sample];
-                    blockEnergy += (double) l * l + (double) r * r;
-                }
-
-                const double blockMeanSquare = blockEnergy / (double) (blockSize * numChannels);
-                if (meanSquareToDbSafe(blockMeanSquare) > -70.0f)
-                    gatedBlocks.push_back(blockMeanSquare);
-            }
-
-            if (!gatedBlocks.empty())
-            {
-                const double ungatedAverage = std::accumulate(gatedBlocks.begin(), gatedBlocks.end(), 0.0) / (double) gatedBlocks.size();
-                const float relativeGateDb = meanSquareToDbSafe(ungatedAverage) - 10.0f;
-                double gatedAverage = 0.0;
-                int gatedCount = 0;
-
-                for (const double blockMeanSquare : gatedBlocks)
-                {
-                    if (meanSquareToDbSafe(blockMeanSquare) >= relativeGateDb)
-                    {
-                        gatedAverage += blockMeanSquare;
-                        ++gatedCount;
-                    }
-                }
-
-                if (gatedCount > 0)
-                    features.gatedRmsDb = meanSquareToDbSafe(gatedAverage / (double) gatedCount);
-            }
-
             constexpr int fftOrder = 12;
             constexpr int fftSize = 1 << fftOrder;
             constexpr int hopSize = fftSize / 4;
             juce::dsp::FFT fft(fftOrder);
             juce::dsp::WindowingFunction<float> window(fftSize, juce::dsp::WindowingFunction<float>::hann);
             std::array<double, eqBandCount> eqBandEnergy {};
+            std::vector<std::array<float, eqBandCount>> frameBandProfiles;
+            std::vector<float> frameWeights;
             double lowEnergy = 0.0;
             double midEnergy = 0.0;
             double highEnergy = 0.0;
+            double spectralWeightSum = 0.0;
             const float maxAnalysisFreq = juce::jmin(20000.0f, (float) sampleRate * 0.45f);
             const auto eqBandEdges = makeEqBandEdges(maxAnalysisFreq);
             const auto frameStarts = makeFrameStarts(numSamples, fftSize, hopSize);
+            frameBandProfiles.reserve(frameStarts.size());
+            frameWeights.reserve(frameStarts.size());
 
             for (const int startSample : frameStarts)
             {
                 std::array<float, fftSize * 2> fftData {};
+                std::array<double, eqBandCount> frameBandEnergy {};
+                double frameMeanSquare = 0.0;
 
                 for (int i = 0; i < fftSize; ++i)
                 {
                     const int sampleIndex = juce::jmin(startSample + i, numSamples - 1);
-                    fftData[(size_t) i] = 0.5f * (left[sampleIndex] + right[sampleIndex]);
+                    const float mono = 0.5f * (left[sampleIndex] + right[sampleIndex]);
+                    fftData[(size_t) i] = mono;
+                    frameMeanSquare += (double) mono * mono;
                 }
+
+                const float frameRmsDb = meanSquareToDbSafe(frameMeanSquare / (double) fftSize);
+                const float frameWeight = juce::jlimit(0.0f, 1.0f,
+                                                       (frameRmsDb - (features.gatedRmsDb - 18.0f)) / 18.0f);
+                if (frameWeight <= 0.01f)
+                    continue;
 
                 window.multiplyWithWindowingTable(fftData.data(), fftSize);
                 fft.performFrequencyOnlyForwardTransform(fftData.data());
@@ -274,49 +375,84 @@ namespace oxygen
                     const double energy = (double) fftData[(size_t) bin] * fftData[(size_t) bin];
 
                     if (freq < 120.0f)
-                        lowEnergy += energy;
+                        lowEnergy += energy * frameWeight;
                     else if (freq < 4000.0f)
-                        midEnergy += energy;
+                        midEnergy += energy * frameWeight;
                     else
-                        highEnergy += energy;
+                        highEnergy += energy * frameWeight;
 
                     while (bandIndex + 1 < (size_t) eqBandCount && freq >= eqBandEdges[bandIndex + 1])
                         ++bandIndex;
 
                     if (freq >= eqBandEdges[bandIndex] && freq < eqBandEdges[bandIndex + 1])
-                        eqBandEnergy[bandIndex] += energy;
+                    {
+                        eqBandEnergy[bandIndex] += energy * frameWeight;
+                        frameBandEnergy[bandIndex] += energy;
+                    }
                 }
+
+                spectralWeightSum += frameWeight;
+
+                std::array<float, eqBandCount> frameBandDb {};
+                for (int band = 0; band < eqBandCount; ++band)
+                    frameBandDb[(size_t) band] = meanSquareToDbSafe(frameBandEnergy[(size_t) band]);
+
+                frameBandProfiles.push_back(frameBandDb);
+                frameWeights.push_back(frameWeight);
             }
 
-            const float lowDb = meanSquareToDbSafe(lowEnergy / (double) juce::jmax(1, (int) frameStarts.size()));
-            const float midDb = meanSquareToDbSafe(midEnergy / (double) juce::jmax(1, (int) frameStarts.size()));
-            const float highDb = meanSquareToDbSafe(highEnergy / (double) juce::jmax(1, (int) frameStarts.size()));
+            const double normalizationWeight = juce::jmax(1.0, spectralWeightSum);
+            const float lowDb = meanSquareToDbSafe(lowEnergy / normalizationWeight);
+            const float midDb = meanSquareToDbSafe(midEnergy / normalizationWeight);
+            const float highDb = meanSquareToDbSafe(highEnergy / normalizationWeight);
             features.lowVsMidDb = lowDb - midDb;
             features.highVsMidDb = highDb - midDb;
 
             std::array<float, eqBandCount> bandDb {};
             for (int band = 0; band < eqBandCount; ++band)
-                bandDb[(size_t) band] = meanSquareToDbSafe(eqBandEnergy[(size_t) band] / (double) juce::jmax(1, (int) frameStarts.size()));
+                bandDb[(size_t) band] = meanSquareToDbSafe(eqBandEnergy[(size_t) band] / normalizationWeight);
 
-            auto smoothedBandDb = bandDb;
-            for (int pass = 0; pass < 3; ++pass)
-            {
-                const auto previous = smoothedBandDb;
-                for (int band = 0; band < eqBandCount; ++band)
-                {
-                    if (band == 0)
-                        smoothedBandDb[(size_t) band] = 0.75f * previous[(size_t) band] + 0.25f * previous[1];
-                    else if (band == eqBandCount - 1)
-                        smoothedBandDb[(size_t) band] = 0.75f * previous[(size_t) band] + 0.25f * previous[(size_t) band - 1];
-                    else
-                        smoothedBandDb[(size_t) band] = 0.2f * previous[(size_t) band - 1]
-                                                     + 0.6f * previous[(size_t) band]
-                                                     + 0.2f * previous[(size_t) band + 1];
-                }
-            }
+            const auto smoothedBandDb = smoothBandProfile(bandDb);
 
             for (int band = 0; band < eqBandCount; ++band)
                 features.eqDeviationDb[(size_t) band] = bandDb[(size_t) band] - smoothedBandDb[(size_t) band];
+
+            double persistenceWeightSum = 0.0;
+            for (size_t frameIndex = 0; frameIndex < frameBandProfiles.size(); ++frameIndex)
+            {
+                const float weight = frameWeights[frameIndex];
+                if (weight <= 0.0f)
+                    continue;
+
+                const auto smoothedFrame = smoothBandProfile(frameBandProfiles[frameIndex]);
+                for (int band = 0; band < eqBandCount; ++band)
+                {
+                    const float deviation = frameBandProfiles[frameIndex][(size_t) band] - smoothedFrame[(size_t) band];
+                    if (deviation > 0.55f)
+                    {
+                        features.eqExcessPersistence[(size_t) band] += weight
+                            * juce::jlimit(0.0f, 1.0f, (deviation - 0.55f) / 2.4f);
+                    }
+                    else if (deviation < -0.55f)
+                    {
+                        features.eqDeficitPersistence[(size_t) band] += weight
+                            * juce::jlimit(0.0f, 1.0f, (-deviation - 0.55f) / 2.4f);
+                    }
+                }
+
+                persistenceWeightSum += weight;
+            }
+
+            if (persistenceWeightSum > 0.0)
+            {
+                for (int band = 0; band < eqBandCount; ++band)
+                {
+                    features.eqExcessPersistence[(size_t) band] = juce::jlimit(0.0f, 1.0f,
+                        (float) (features.eqExcessPersistence[(size_t) band] / persistenceWeightSum));
+                    features.eqDeficitPersistence[(size_t) band] = juce::jlimit(0.0f, 1.0f,
+                        (float) (features.eqDeficitPersistence[(size_t) band] / persistenceWeightSum));
+                }
+            }
 
             juce::dsp::LinkwitzRileyFilter<float> crossoverLowMid;
             juce::dsp::LinkwitzRileyFilter<float> crossoverMidHigh;
@@ -435,7 +571,7 @@ namespace oxygen
             score += normalizedDifference(features.lowVsMidDb, pattern.lowVsMidDb, 3.0f) * 1.15f;
             score += normalizedDifference(features.highVsMidDb, pattern.highVsMidDb, 3.0f) * 1.25f;
             score += normalizedDifference(features.crestDb, pattern.crestDb, 5.0f) * 1.10f;
-            score += normalizedDifference(features.gatedRmsDb, pattern.gatedRmsDb, 4.5f) * 1.20f;
+            score += normalizedDifference(features.integratedLufs, pattern.gatedRmsDb, 4.0f) * 1.20f;
             score += normalizedDifference(features.sideRatio, pattern.sideRatio, 0.22f) * 0.95f;
             score += normalizedDifference(features.stereoCorrelation, pattern.stereoCorrelation, 0.30f) * 0.90f;
 
@@ -615,10 +751,13 @@ namespace oxygen
 
         float computeLoudnessProxyDb(const AnalysisFeatures& features)
         {
+            const float programLoudness = (features.integratedLufs > -99.0f)
+                                        ? features.integratedLufs
+                                        : features.gatedRmsDb;
             const float lowMaskingPenalty = juce::jmax(0.0f, features.lowVsMidDb - 1.0f) * 0.22f;
             const float darkBalancePenalty = juce::jmax(0.0f, -features.highVsMidDb - 1.2f) * 0.18f;
             const float presenceLift = juce::jmax(0.0f, juce::jmin(features.highVsMidDb, 2.5f)) * 0.10f;
-            return features.gatedRmsDb - lowMaskingPenalty - darkBalancePenalty + presenceLift;
+            return programLoudness - lowMaskingPenalty - darkBalancePenalty + presenceLift;
         }
 
         GenreTuning getGenreTuning(AssistantGenre genre)
@@ -753,10 +892,22 @@ namespace oxygen
         const auto directionTuning = getDirectionTuning(effectiveContext.direction);
         const float loudnessProxyDb = computeLoudnessProxyDb(features);
         const float targetProgramLoudnessDb = genreTuning.targetLoudnessDb + directionTuning.loudnessBiasDb;
+        const auto maxBandRange = [] (const auto& values, int startBand, int endBand)
+        {
+            float value = 0.0f;
+            for (int band = startBand; band <= endBand; ++band)
+                value = juce::jmax(value, values[(size_t) band]);
+            return value;
+        };
 
         const float mudExcess = juce::jmax(features.eqDeviationDb[4], features.eqDeviationDb[5], features.eqDeviationDb[6]);
         const float harshExcess = juce::jmax(features.eqDeviationDb[9], features.eqDeviationDb[10], features.eqDeviationDb[11]);
         const float presenceDip = juce::jmax(0.0f, -(features.eqDeviationDb[8] + features.eqDeviationDb[9]) * 0.5f);
+        const float mudPersistence = maxBandRange(features.eqExcessPersistence, 4, 6);
+        const float harshPersistence = maxBandRange(features.eqExcessPersistence, 9, 11);
+        const float lowLiftPersistence = maxBandRange(features.eqDeficitPersistence, 1, 3);
+        const float presencePersistence = maxBandRange(features.eqDeficitPersistence, 8, 9);
+        const float airPersistence = maxBandRange(features.eqDeficitPersistence, 12, 13);
 
         const float lowOverhang = positiveEvidence(features.lowVsMidDb,
                                                    1.8f - (genreTuning.lowBias * 0.60f) - (directionTuning.warmthBias * 0.20f));
@@ -767,17 +918,22 @@ namespace oxygen
         const float topDeficit = positiveEvidence(-features.highVsMidDb,
                                                   1.6f + (directionTuning.warmthBias * 0.45f));
         const float mudEvidence = positiveEvidence(mudExcess, genreTuning.mudToleranceDb)
-                                * juce::jlimit(0.55f, 1.30f, 0.82f + (0.07f * features.lowVsMidDb));
+                                * juce::jlimit(0.35f, 1.45f,
+                                               0.62f + (0.07f * features.lowVsMidDb) + (0.75f * mudPersistence));
         const float harshEvidence = positiveEvidence(harshExcess, genreTuning.harshToleranceDb)
-                                  * juce::jlimit(0.55f, 1.30f, 0.84f + (0.07f * features.highVsMidDb));
+                                  * juce::jlimit(0.35f, 1.45f,
+                                                 0.64f + (0.07f * features.highVsMidDb) + (0.75f * harshPersistence));
         const float presenceOpportunity = positiveEvidence(presenceDip,
                                                            0.85f - (genreTuning.presenceBias * 0.35f))
                                         * juce::jlimit(0.20f, 1.25f,
-                                                       1.05f - (0.30f * topOverhang) - (0.25f * harshEvidence));
+                                                       0.88f + (0.65f * presencePersistence)
+                                                     - (0.30f * topOverhang) - (0.25f * harshEvidence));
         const float airOpportunity = positiveEvidence(topDeficit, 0.25f)
-                                   * juce::jlimit(0.15f, 1.20f, 1.0f - (0.40f * harshEvidence));
+                                   * juce::jlimit(0.15f, 1.25f,
+                                                  0.88f + (0.70f * airPersistence) - (0.40f * harshEvidence));
         const float lowPunchOpportunity = positiveEvidence(lowDeficit, 0.30f)
-                                        * juce::jlimit(0.15f, 1.20f, 1.0f - (0.55f * mudEvidence));
+                                        * juce::jlimit(0.15f, 1.25f,
+                                                       0.88f + (0.70f * lowLiftPersistence) - (0.55f * mudEvidence));
         const float tonalImbalanceScore = (0.45f * std::abs(features.lowVsMidDb))
                                         + (0.50f * std::abs(features.highVsMidDb));
         const float problemSeverity = (0.80f * mudEvidence)
@@ -787,10 +943,16 @@ namespace oxygen
         const float enhancementSeverity = (0.65f * lowPunchOpportunity)
                                         + (0.80f * presenceOpportunity)
                                         + (0.75f * airOpportunity);
-        const float eqSeverity = tonalImbalanceScore + problemSeverity + enhancementSeverity;
+        const float persistenceSeverity = (0.70f * mudPersistence)
+                                        + (0.70f * harshPersistence)
+                                        + (0.55f * lowLiftPersistence)
+                                        + (0.60f * presencePersistence)
+                                        + (0.60f * airPersistence);
+        const float eqSeverity = tonalImbalanceScore + problemSeverity + enhancementSeverity + persistenceSeverity;
         const bool mostlyBalanced = eqSeverity < 1.65f;
         const bool overCompressedProgram = features.crestDb < (6.5f - (0.45f * genreTuning.transientTolerance));
         const bool hotProgram = loudnessProxyDb > (targetProgramLoudnessDb - 0.9f)
+                             || features.shortTermLufs > (targetProgramLoudnessDb + 0.7f)
                              || features.truePeakDb > (genreTuning.ceilingDb + 0.35f);
         const bool needsGlueControl = features.crestDb > (8.8f + genreTuning.transientTolerance)
                                    && features.truePeakDb > -1.8f;
@@ -886,7 +1048,9 @@ namespace oxygen
             if (hole <= 0.0f)
                 return;
 
-            addEqGain(params, band, juce::jlimit(0.0f, maxBoost, (0.16f + (hole * scale)) * driver));
+            const float persistenceScale = 0.40f + (1.15f * features.eqDeficitPersistence[(size_t) band]);
+            addEqGain(params, band, juce::jlimit(0.0f, maxBoost,
+                                                 (0.12f + (hole * scale)) * driver * persistenceScale));
         };
 
         for (int band = 3; band <= 11; ++band)
@@ -903,7 +1067,9 @@ namespace oxygen
             const float tonalGuard = (centerFreq < 800.0f)
                                    ? juce::jlimit(0.55f, 1.25f, 0.82f + (0.07f * features.lowVsMidDb))
                                    : juce::jlimit(0.55f, 1.25f, 0.84f + (0.07f * features.highVsMidDb));
-            const float cutDb = juce::jlimit(0.0f, 1.45f, resonanceEvidence * 0.42f * tonalGuard);
+            const float persistenceScale = 0.38f + (1.25f * features.eqExcessPersistence[(size_t) band]);
+            const float cutDb = juce::jlimit(0.0f, 1.65f,
+                                             resonanceEvidence * 0.42f * tonalGuard * persistenceScale);
             addEqGain(params, band, -cutDb);
         }
 

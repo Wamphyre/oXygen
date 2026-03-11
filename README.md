@@ -1,131 +1,186 @@
 # oXygen Mastering Suite
 
-**oXygen** is a free and open-source mastering suite built with C++ and the JUCE framework. Designed for high fidelity and flexibility, it features AI-assisted automatic mastering functions, a modern Material Design 3 interface, a powerful 16-band graphic equalizer, and a suite of multiband dynamics processors.
+**oXygen** is a free and open-source mastering plugin built with C++ and JUCE. The project is focused on a practical mastering workflow: corrective EQ, multiband control, stereo shaping, final loudness, and an automatic Master Assistant that listens to the incoming mix and writes settings into the modules.
 
-![Version](https://img.shields.io/badge/version-0.0.1-alpha)
-![Platform](https://img.shields.io/badge/platform-Windows-blue)
-![Platform](https://img.shields.io/badge/platform-macOS-blue)
+The current codebase is **cross-platform by design**, but the most actively used and validated path right now is **macOS VST3**. Windows and Linux build paths exist in CMake and remain part of the roadmap, but they still need more validation, packaging work, and real-world testing.
+
+![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
+![Format](https://img.shields.io/badge/format-VST3-blue)
+![Codebase](https://img.shields.io/badge/codebase-macOS%20%7C%20Windows%20%7C%20Linux-blue)
+![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Windows%2FLinux%20pending-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Me-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wamphyre94078)
 
 ![oXygen Logo](assets/oxygen_logo.svg)
 
+![oXygen Screenshot](assets/screenshot.png)
+
 ## Features
 
 ### Core Functionality
-- **AI-Assisted Mastering**: Automatically analyzes your track's loudness and tonal balance.
-- **Smart Suggestions**: Provides target settings for gain and EQ to achieve a balanced, commercial-grade master.
-- **16-Band Graphic Equalizer**: Precision control ranging from 30Hz to 25kHz with high-quality Peak filters.
-- **Multiband Compressor**: 4 independent bands (Low, Low-Mid, High-Mid, High) with Linkwitz-Riley crossovers.
-- **Stereo Imager**: Multiband width adjustment with mono compatibility safe for the low end.
-- **Maximizer**: Transparent limiting to catch peaks without crushing dynamics.
-- **Gain**: Simple, transparent input/output gain staging.
+- **Master Assistant**: Listens to up to 60 seconds of incoming audio, analyzes tonal balance, dynamics, stereo spread, loudness, and true peak behaviour, then proposes settings for the processing chain.
+- **15-Band Graphic EQ**: Fixed-band mastering EQ from `30 Hz` to `20 kHz`, with smoothed gain changes and a more musical Q contour across the spectrum.
+- **4-Band Multiband Compressor**: Low, Low-Mid, High-Mid, and High bands with stereo-linked detection, hybrid peak/RMS behaviour, and softer knee handling for better glue.
+- **Stereo Imager**: Multiband width control with safeguards intended to keep the low end more mono-compatible and prevent obviously unstable widening.
+- **Gain Stage**: Dedicated trim stage for workflow and level management inside the chain.
+- **Maximizer**: Final loudness processor with lookahead, internal oversampling, adaptive release, and host latency reporting.
 
 ### Audio Engine
-- **Modular Architecture**: Built on `juce::AudioProcessorGraph` for robust internal routing.
-- **Linkwitz-Riley Crossovers**: Transparent frequency splitting (24dB/oct).
-- **NaN/Silence Protection**: Optimized DSP processing with safety checks.
-- **Auto-Detect**: Adjusts to Mono/Stereo configurations for DAW compatibility.
+- **Modular Signal Chain**: Built on `juce::AudioProcessorGraph` and designed around a mastering rack workflow.
+- **Current Module Order**: `Graphic EQ -> Multiband Comp -> Stereo Imager -> Gain -> Maximizer`.
+- **Reorder / Bypass / Collapse**: Each module can be moved, bypassed, or collapsed from the rack UI.
+- **Original vs Processed Analyzer**: The spectrum display overlays the incoming signal and the processed output so tonal changes can be checked visually.
+- **Mono / Stereo Compatibility**: The plugin supports mono and stereo bus layouts and routes the chain coherently through to the final output.
+- **Single and Double Precision Host Paths**: The plugin accepts both float and double precision processing from the host. DSP refinement is still ongoing module by module.
 
-### Modern GUI (Material Design 3)
-- **Vector Graphics**: Fully scalable SVG-based interface.
-- **Theme Engine**: Centralized color and typography management.
-- **Custom Fonts**: **Outfit** (Headings) and **Unbounded** (Body) for a clean, futuristic look.
+### Interface
+- **Custom SVG-Based Branding**: Scalable vector graphics and custom theme assets.
+- **Focused Mastering Layout**: Top analyzer, side meters, and a vertical processing rack for quick access to each stage.
+- **Assistant Feedback Flow**: A dedicated listening dialog appears during analysis, with progress feedback and an apply confirmation step after the listening pass.
 
 ## System Requirements
 
 ### macOS
-- **OS**: macOS 10.13 or later
-- **Format**: VST3, AU
-- **Univeral**: Intel and Apple Silicon support
+- **Format**: VST3
+- **Status**: Current primary development and validation platform
+- **Build Path**: Supported directly with `build.sh` or manual CMake
 
 ### Windows
-- **OS**: Windows 10 or 11 (64-bit)
 - **Format**: VST3
+- **Status**: Codebase and CMake path exist, but validation and packaging are still in progress
+- **Build Path**: Manual CMake / Visual Studio workflow
 
-## 📦 Build from Source
+### Linux
+- **Format**: VST3
+- **Status**: CMake path is present, but Linux support is still under active development and needs more testing
+- **Build Path**: Manual CMake workflow
 
-### 🍎 macOS
+## Build from Source
+
+### macOS
 
 #### Dependencies
-*   **Xcode Command Line Tools** (install via `xcode-select --install`)
-*   **CMake 3.20+** (install via `brew install cmake`)
-*   **Git**
+- **Xcode Command Line Tools** (`xcode-select --install`)
+- **CMake 3.22+**
+- **Git**
 
 #### Build Steps
-1.  **Clone the Repository**
-    ```bash
-    git clone https://github.com/Wamphyre/oXygen.git
-    cd oXygen
-    ```
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/Wamphyre/oXygen.git
+   cd oXygen
+   ```
 
-2.  **Build**
-    We provide a script to automate the configuration and build process:
-    ```bash
-    ./build.sh
-    ```
-    Alternatively, you can build manually:
-    ```bash
-    cmake -B build -DCMAKE_BUILD_TYPE=Release
-    cmake --build build --config Release
-    ```
+2. **Build with the helper script**
+   ```bash
+   ./build.sh
+   ```
 
-3.  **Artifacts**
-    The compiled plugin (VST3) will be located in:
-    `releases/`
+3. **Or build manually**
+   ```bash
+   cmake -B build -DCMAKE_BUILD_TYPE=Release
+   cmake --build build --config Release
+   ```
+
+4. **Artifacts**
+   The build places the VST3 bundle in:
+   ```text
+   releases/oXygen.vst3
+   ```
+
+> Note: if the `JUCE/` folder is not present locally, CMake will fetch JUCE automatically during configuration.
 
 ---
 
-### 🪟 Windows
+### Windows
 
 #### Dependencies
-*   **Select "Desktop development with C++"** during installation.
-*   **CMake 3.20+** (often included with VS, or install separately)
-*   **Git**
+- **Visual Studio 2022** with `Desktop development with C++`
+- **CMake 3.22+**
+- **Git**
 
 #### Build Steps
-1.  **Clone the Repository**
-    Open PowerShell or Git Bash and run:
-    ```powershell
-    git clone https://github.com/Wamphyre/oXygen.git
-    cd oXygen
-    ```
+1. **Clone the repository**
+   ```powershell
+   git clone https://github.com/Wamphyre/oXygen.git
+   cd oXygen
+   ```
 
-2.  **Configure**
-    This will automatically download the JUCE framework (if not present) and generate the Visual Studio solution.
-    ```powershell
-    cmake -B build
-    ```
+2. **Configure**
+   ```powershell
+   cmake -B build
+   ```
 
-3.  **Build**
-    Compile in Release mode for optimized performance.
-    ```powershell
-    cmake --build build --config Release
-    ```
+3. **Build**
+   ```powershell
+   cmake --build build --config Release
+   ```
 
-4.  **Artifacts**
-    The plugin is automatically copied to the `releases/` folder:
-    `releases/oXygen.vst3`
+4. **Artifacts**
+   ```text
+   releases/oXygen.vst3
+   ```
+
+> Note: Windows support is not yet considered fully validated. Expect further iteration on packaging, testing, and deployment details.
+
+---
+
+### Linux
+
+#### Dependencies
+- **GCC or Clang** with C++20 support
+- **CMake 3.22+**
+- **Git**
+- **Ninja** or **Make**
+
+#### Build Steps
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/Wamphyre/oXygen.git
+   cd oXygen
+   ```
+
+2. **Configure**
+   ```bash
+   cmake -B build -DCMAKE_BUILD_TYPE=Release
+   ```
+
+3. **Build**
+   ```bash
+   cmake --build build --config Release
+   ```
+
+4. **Artifacts**
+   ```text
+   releases/oXygen.vst3
+   ```
+
+> Note: Linux support is still work in progress and should be treated as experimental until more validation is completed.
 
 ## Usage
 
-### AI Mastering
-1.  **Insert oXygen** on your master bus.
-2.  **Play audio** through the plugin.
-3.  **Analyze**: Let the AI listen to your track to suggest optimal settings.
+### Usage Guide
+1. **Insert oXygen on your master bus**. The plugin is mainly intended for stereo mix-bus / master-bus mastering, but it can also be used on stems or individual tracks when needed.
+2. **Feed it representative material**. If you plan to use the Master Assistant, play the loudest or most information-rich section of the mix rather than a quiet intro.
+3. **Run Master Assist**. The plugin enters a listening state, shows a progress window, and captures up to 60 seconds of real incoming audio.
+4. **Confirm the proposal**. After the listening pass, oXygen generates suggested settings and asks for confirmation before writing them into the modules.
+5. **Check the analyzer overlay**. Use the `Original` and `Processed` spectrum curves to verify what changed instead of judging only by output loudness.
+6. **Refine manually**. Treat the assistant as a starting point, then fine-tune EQ, compression, stereo width, gain staging, and maximizer settings for the final result.
+7. **Level-match your decisions**. Louder often sounds better at first; compare with care when deciding whether processing is actually improving the mix.
 
 ### Manual Control
--   **EQ**: Adjust the 16 bands to shape the tonal balance.
--   **Dynamics**: Use the multiband compressor to control levels across frequency ranges.
--   **Width**: Use the Stereo Imager to widen the mix (avoid widening low frequencies).
--   **Limit**: Use the Maximizer to increase loudness while preventing clipping.
+- **Graphic EQ**: Use it for broad tonal correction and enhancement. Remove obvious mud, harshness, or imbalance before pushing top-end shine.
+- **Multiband Comp**: Use it for glue and control, not constant pumping. Small moves usually work better than extreme thresholds.
+- **Stereo Imager**: Widen upper bands carefully. Keep low frequencies conservative if you want safer mono translation.
+- **Gain**: Use this stage to manage level into the maximizer and keep the overall chain under control.
+- **Maximizer**: Use it as the final loudness stage. Raise loudness logically, but leave enough headroom to avoid turning the master brittle.
 
 ## Support & Donations
-If you find oXygen useful and want to support its development, consider buying me a beer! ☕
+If you find oXygen useful and want to support its development, consider supporting the project:
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/wamphyre94078)
 
 ---
 
-**Made with ❤️ for the audio community**
+Built for iterative mastering development, with more platform validation and DSP refinement still ahead.
 

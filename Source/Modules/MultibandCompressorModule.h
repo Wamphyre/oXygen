@@ -36,8 +36,8 @@ namespace oxygen
 
         struct BandRuntimeState
         {
-            float thresholdGain = 1.0f;
-            float ratioInverse = 1.0f;
+            float thresholdDb = -10.0f;
+            float ratioInverseMinusOne = -0.5f;
             float attackCoeff = 0.0f;
             float releaseCoeff = 0.0f;
             float envelope = 0.0f;

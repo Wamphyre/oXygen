@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "../MasteringModule.h"
+#include <array>
 
 namespace oxygen
 {
@@ -31,19 +32,27 @@ namespace oxygen
             1500.0f, 2500.0f, 4000.0f, 6000.0f, 
             10000.0f, 15000.0f, 20000.0f 
         };
+        static constexpr std::array<float, NumBands> BandQValues = {
+            0.78f, 0.84f, 0.92f, 1.02f,
+            1.10f, 1.16f, 1.22f, 1.28f,
+            1.28f, 1.22f, 1.14f, 1.05f,
+            0.95f, 0.84f, 0.76f
+        };
 
     private:
+        static constexpr double parameterSmoothingSeconds = 0.035;
         // One peak filter per EQ band, duplicated across all active channels.
         
         using MonoFilter = juce::dsp::IIR::Filter<float>;
         using Filter = juce::dsp::ProcessorDuplicator<MonoFilter, juce::dsp::IIR::Coefficients<float>>;
         std::vector<std::unique_ptr<Filter>> filters;
+        std::array<juce::LinearSmoothedValue<float>, NumBands> smoothedGains;
         
         float lastGains[NumBands];
         double lastSampleRate = 0.0;
         
         // Helper to update filters
-        void updateFilters();
+        void updateFilters(int numSamples);
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EqualizerModule)
     };

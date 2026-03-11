@@ -9,6 +9,9 @@ namespace oxygen
     class MaximizerModule : public MasteringModule
     {
     public:
+        static constexpr double lookaheadTimeMs = 5.0;
+        static constexpr size_t oversamplingFactorExponent = 2;
+
         MaximizerModule();
         ~MaximizerModule() override;
 
@@ -24,14 +27,26 @@ namespace oxygen
         juce::RangedAudioParameter* getBypassParameter() const override { return apvts.getParameter("Bypass"); }
 
     private:
+        static constexpr double parameterSmoothingMs = 20.0;
+        static constexpr size_t maxSupportedChannels = 2;
+
         float lastThreshold = -100.0f, lastRelease = -1.0f, lastCeiling = -100.0f;
-        float currentInputDrive = 1.0f;
-        float currentCeilingGain = 1.0f;
-        float releaseCoeff = 0.0f;
         float currentGain = 1.0f;
         int lookaheadSamples = 0;
+        int oversampledLookaheadSamples = 0;
         int delayWritePosition = 0;
         double currentSampleRate = 44100.0;
+        double currentOversampledRate = 44100.0;
+        juce::dsp::Oversampling<float> oversampling
+        {
+            maxSupportedChannels,
+            oversamplingFactorExponent,
+            juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple,
+            true,
+            true
+        };
+        juce::LinearSmoothedValue<float> inputDriveSmoothed;
+        juce::LinearSmoothedValue<float> ceilingGainSmoothed;
         juce::AudioBuffer<float> delayBuffer;
         std::vector<float> gainReductionBuffer;
         std::vector<float> previousDrivenSamples;

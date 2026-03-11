@@ -14,6 +14,7 @@ namespace oxygen
         {
             filters.push_back(std::make_unique<Filter>());
             lastGains[i] = std::numeric_limits<float>::quiet_NaN();
+            smoothedGains[(size_t) i].setCurrentAndTargetValue(0.0f);
         }
     }
 
@@ -58,8 +59,14 @@ namespace oxygen
             filter->reset();
         }
 
+        for (int i = 0; i < NumBands; ++i)
+        {
+            smoothedGains[(size_t) i].reset(sampleRate, parameterSmoothingSeconds);
+            smoothedGains[(size_t) i].setCurrentAndTargetValue(apvts.getRawParameterValue("Gain" + juce::String(i))->load());
+        }
+
         lastSampleRate = 0.0;
-        updateFilters();
+        updateFilters(samplesPerBlock);
     }
 
     void EqualizerModule::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -67,7 +74,7 @@ namespace oxygen
         if (apvts.getRawParameterValue("Bypass")->load() > 0.5f)
             return;
 
-        updateFilters();
+        updateFilters(buffer.getNumSamples());
         
         juce::dsp::AudioBlock<float> block(buffer);
         juce::dsp::ProcessContextReplacing<float> context(block);
@@ -77,7 +84,7 @@ namespace oxygen
             filter->process(context);
     }
     
-    void EqualizerModule::updateFilters()
+    void EqualizerModule::updateFilters(int numSamples)
     {
         const auto currentSampleRate = getSampleRate();
         if (currentSampleRate <= 0.0)
@@ -90,14 +97,18 @@ namespace oxygen
 
         for (int i = 0; i < NumBands; ++i)
         {
-            float gainDb = apvts.getRawParameterValue("Gain" + juce::String(i))->load();
+            auto& smoothedGain = smoothedGains[(size_t) i];
+            smoothedGain.setTargetValue(apvts.getRawParameterValue("Gain" + juce::String(i))->load());
+            const float gainDb = (numSamples > 0)
+                               ? smoothedGain.skip(numSamples)
+                               : smoothedGain.getCurrentValue();
             
             // Optimization: Only update if changed (epsilon check)
-            if (sampleRateChanged || !std::isfinite(lastGains[i]) || std::abs(gainDb - lastGains[i]) > 0.01f)
+            if (sampleRateChanged || !std::isfinite(lastGains[i]) || std::abs(gainDb - lastGains[i]) > 0.0025f)
             {
                 lastGains[i] = gainDb;
                 const float gain = std::isfinite(gainDb) ? juce::Decibels::decibelsToGain(gainDb) : 1.0f;
-                const float q = 1.41f; // Standard Octave Q
+                const float q = BandQValues[(size_t) i];
                 const float safeFreq = juce::jlimit(20.0f, maxFreq, Frequencies[i]);
 
                 auto coeffs = juce::dsp::IIR::Coefficients<float>::makePeakFilter(currentSampleRate, safeFreq, q, gain);

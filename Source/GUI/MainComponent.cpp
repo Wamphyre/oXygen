@@ -2,41 +2,21 @@
 #include "Theme.h"
 #include "../PluginProcessor.h"
 #include "../Assets.h"
-#include <array>
+#include <memory>
 
 using namespace oxygen;
 
 namespace
 {
     constexpr int headerHeight = 96;
-
-    int intensityToComboId(OxygenAudioProcessor::AssistantIntensity intensity)
-    {
-        switch (intensity)
-        {
-            case OxygenAudioProcessor::AssistantIntensity::Soft: return 1;
-            case OxygenAudioProcessor::AssistantIntensity::Standard: return 2;
-            case OxygenAudioProcessor::AssistantIntensity::Hard: return 3;
-        }
-
-        return 2;
-    }
-
-    OxygenAudioProcessor::AssistantIntensity intensityFromComboId(int id)
-    {
-        switch (id)
-        {
-            case 1: return OxygenAudioProcessor::AssistantIntensity::Soft;
-            case 2: return OxygenAudioProcessor::AssistantIntensity::Standard;
-            case 3: return OxygenAudioProcessor::AssistantIntensity::Hard;
-            default: return OxygenAudioProcessor::AssistantIntensity::Standard;
-        }
-    }
+    constexpr int meterTextHeight = 30;
 }
 
 MainComponent::MainComponent(OxygenAudioProcessor& p)
     : audioProcessor(p),
-      spectrumAnalyzer(p.getAudioBufferQueue(), [&p] { return p.getSampleRate(); })
+      spectrumAnalyzer(p.getInputAudioBufferQueue(),
+                       p.getOutputAudioBufferQueue(),
+                       [&p] { return p.getSampleRate(); })
 {
     // Rack
     moduleRack = std::make_unique<ModuleRack>(p);
@@ -73,22 +53,6 @@ MainComponent::MainComponent(OxygenAudioProcessor& p)
         startAssistantListening();
     };
     addAndMakeVisible(masterAssistButton.get());
-
-    assistantIntensityLabel.setText("INTENSITY", juce::dontSendNotification);
-    assistantIntensityLabel.setColour(juce::Label::textColourId, oxygen::Theme::Colors::OnSurfaceVariant);
-    assistantIntensityLabel.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(assistantIntensityLabel);
-
-    assistantIntensityBox.addItem("Soft", 1);
-    assistantIntensityBox.addItem("Standard", 2);
-    assistantIntensityBox.addItem("Hard", 3);
-    assistantIntensityBox.setSelectedId(intensityToComboId(audioProcessor.getAssistantIntensity()),
-                                        juce::dontSendNotification);
-    assistantIntensityBox.onChange = [this]
-    {
-        audioProcessor.setAssistantIntensity(intensityFromComboId(assistantIntensityBox.getSelectedId()));
-    };
-    addAndMakeVisible(assistantIntensityBox);
     
     setSize(1100, 1000); // Increased default size for better visibility
     startTimerHz(60);   // Smoother 60fps update
@@ -134,11 +98,6 @@ void MainComponent::resized()
         auto buttonArea = headerArea.removeFromRight(190).reduced(6, 10);
         masterAssistButton->setBounds(buttonArea);
     }
-
-    auto intensityArea = headerArea.removeFromRight(170).reduced(6, 10);
-    auto intensityLabelArea = intensityArea.removeFromTop(18);
-    assistantIntensityLabel.setBounds(intensityLabelArea);
-    assistantIntensityBox.setBounds(intensityArea);
     
     // Spectrum Analyzer (Top 120px - Slightly more compact)
     auto visualizerArea = area.removeFromTop(120).reduced(10, 5);
@@ -149,13 +108,12 @@ void MainComponent::resized()
     auto rightSidebar = area.removeFromRight(70);
     
     // Segmented Meters (Left)
-    // Reserve bottom 20px for text
-    auto leftMetersArea = leftSidebar.removeFromTop(leftSidebar.getHeight() - 25);
+    auto leftMetersArea = leftSidebar.removeFromTop(leftSidebar.getHeight() - meterTextHeight);
     inputMeterL.setBounds(leftMetersArea.removeFromLeft(35).reduced(2, 0));
     inputMeterR.setBounds(leftMetersArea.reduced(2, 0));
     
     // Segmented Meters (Right)
-    auto rightMetersArea = rightSidebar.removeFromTop(rightSidebar.getHeight() - 25);
+    auto rightMetersArea = rightSidebar.removeFromTop(rightSidebar.getHeight() - meterTextHeight);
     outputMeterL.setBounds(rightMetersArea.removeFromLeft(35).reduced(2, 0));
     outputMeterR.setBounds(rightMetersArea.reduced(2, 0));
     
@@ -205,24 +163,30 @@ void MainComponent::paint(juce::Graphics& g)
     drawStereoMeterValue(g,
                          audioProcessor.getInputLevel(0),
                          audioProcessor.getInputLevel(1),
-                         inputMeterL.getX(),
-                         inputMeterL.getBottom() + 5,
-                         inputMeterL.getWidth() * 2 + 10);
+                         { inputMeterL.getX(),
+                           inputMeterL.getBottom() + 4,
+                           inputMeterR.getRight() - inputMeterL.getX(),
+                           meterTextHeight - 4 });
     drawStereoMeterValue(g,
                          audioProcessor.getOutputLevel(0),
                          audioProcessor.getOutputLevel(1),
-                         outputMeterL.getX(),
-                         outputMeterL.getBottom() + 5,
-                         outputMeterL.getWidth() * 2 + 10);
+                         { outputMeterL.getX(),
+                           outputMeterL.getBottom() + 4,
+                           outputMeterR.getRight() - outputMeterL.getX(),
+                           meterTextHeight - 4 });
 }
 
-void MainComponent::drawStereoMeterValue(juce::Graphics& g, float leftLevel, float rightLevel, int x, int y, int w)
+void MainComponent::drawStereoMeterValue(juce::Graphics& g,
+                                         float leftLevel,
+                                         float rightLevel,
+                                         juce::Rectangle<int> bounds)
 {
     g.setColour(oxygen::Theme::Colors::OnSurfaceVariant);
-    g.setFont(oxygen::Theme::Fonts::getBody().withHeight(12.0f));
-    
-    const auto text = "L " + formatLevelText(leftLevel) + "  R " + formatLevelText(rightLevel);
-    g.drawText(text, x, y, w, 20, juce::Justification::centred, false);
+    g.setFont(oxygen::Theme::Fonts::getBody().withHeight(10.0f));
+
+    auto topLine = bounds.removeFromTop(bounds.getHeight() / 2);
+    g.drawText("L " + formatLevelText(leftLevel), topLine, juce::Justification::centred, false);
+    g.drawText("R " + formatLevelText(rightLevel), bounds, juce::Justification::centred, false);
 }
 
 juce::String MainComponent::formatLevelText(float level) const
@@ -248,7 +212,6 @@ void MainComponent::startAssistantListening()
         masterAssistButton->setButtonText("LISTENING...");
         masterAssistButton->setEnabled(false);
     }
-    assistantIntensityBox.setEnabled(false);
 
     auto* listenWindow = new juce::AlertWindow("Master Assistant Listening",
                                                "The plugin is listening to your mix.\n"
@@ -285,7 +248,6 @@ void MainComponent::cancelAssistantListening()
         masterAssistButton->setButtonText("MASTER ASSIST");
         masterAssistButton->setEnabled(true);
     }
-    assistantIntensityBox.setEnabled(true);
     pendingAssistantParameters.reset();
 
     closeAssistantListenWindow();
@@ -303,7 +265,6 @@ void MainComponent::completeAssistantListening()
         masterAssistButton->setButtonText("MASTER ASSIST");
         masterAssistButton->setEnabled(true);
     }
-    assistantIntensityBox.setEnabled(true);
 
     closeAssistantListenWindow();
 
@@ -338,39 +299,23 @@ void MainComponent::showAssistantApplyConfirmation()
 
     auto* confirmationWindow = new juce::AlertWindow("Master Assistant",
                                                      "Analysis complete.\n"
-                                                     "Choose intensity and apply the mastering settings.",
+                                                     "Apply the recommended mastering settings to the modules?",
                                                      juce::AlertWindow::QuestionIcon);
-
-    auto* intensityBox = new juce::ComboBox();
-    intensityBox->addItem("Soft", 1);
-    intensityBox->addItem("Standard", 2);
-    intensityBox->addItem("Hard", 3);
-    intensityBox->setSelectedId(intensityToComboId(audioProcessor.getAssistantIntensity()),
-                                juce::dontSendNotification);
-    confirmationWindow->addCustomComponent(intensityBox);
     confirmationWindow->addButton("Apply", 1);
     confirmationWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
     confirmationWindow->setAlwaysOnTop(true);
-    confirmationWindow->centreAroundComponent(this, 420, 220);
+    confirmationWindow->centreAroundComponent(this, 400, 190);
 
     juce::Component::SafePointer<MainComponent> safeThis(this);
-    juce::Component::SafePointer<juce::ComboBox> safeIntensityBox(intensityBox);
     confirmationWindow->enterModalState(true,
-                                        juce::ModalCallbackFunction::create([safeThis, safeIntensityBox](int result)
+                                        juce::ModalCallbackFunction::create([safeThis](int result)
                                         {
                                             if (safeThis == nullptr)
                                                 return;
 
                                             if (result == 1 && safeThis->pendingAssistantParameters.has_value())
                                             {
-                                                const auto intensity = intensityFromComboId(safeIntensityBox != nullptr
-                                                                                                ? safeIntensityBox->getSelectedId()
-                                                                                                : 2);
-                                                safeThis->assistantIntensityBox.setSelectedId(intensityToComboId(intensity),
-                                                                                             juce::dontSendNotification);
-                                                safeThis->audioProcessor.setAssistantIntensity(intensity);
-                                                if (!safeThis->audioProcessor.applyMasterAssistantSuggestion(*safeThis->pendingAssistantParameters,
-                                                                                                             intensity))
+                                                if (!safeThis->audioProcessor.applyMasterAssistantSuggestion(*safeThis->pendingAssistantParameters))
                                                 {
                                                     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                                                            "Master Assistant",

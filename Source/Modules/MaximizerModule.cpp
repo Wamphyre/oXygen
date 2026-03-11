@@ -6,8 +6,6 @@ namespace oxygen
 {
     namespace
     {
-        constexpr float lookaheadTimeMs = 5.0f;
-
         float computeReleaseCoefficient(double sampleRate, float releaseMs)
         {
             if (sampleRate <= 0.0 || releaseMs <= 0.0f)
@@ -26,6 +24,16 @@ namespace oxygen
                               std::abs(quarter),
                               std::abs(midpoint),
                               std::abs(threeQuarter));
+        }
+
+        float computeAdaptiveReleaseCoefficient(double sampleRate,
+                                               float releaseMs,
+                                               float currentGain,
+                                               float windowGain)
+        {
+            const float gainReduction = juce::jlimit(0.0f, 1.0f, 1.0f - juce::jmin(currentGain, windowGain));
+            const float releaseScale = juce::jmap(gainReduction, 0.0f, 1.0f, 1.0f, 0.45f);
+            return computeReleaseCoefficient(sampleRate, juce::jmax(1.0f, releaseMs * releaseScale));
         }
     }
 
@@ -58,15 +66,31 @@ namespace oxygen
 
     void MaximizerModule::prepareToPlay(double sampleRate, int samplesPerBlock)
     {
-        juce::ignoreUnused(samplesPerBlock);
         currentSampleRate = sampleRate;
-        lookaheadSamples = juce::jmax(1, juce::roundToInt((sampleRate * lookaheadTimeMs) / 1000.0));
-        const int bufferSize = lookaheadSamples + 1;
+        oversampling.reset();
+        oversampling.initProcessing((size_t) juce::jmax(1, samplesPerBlock));
+
+        const auto oversamplingFactor = (double) oversampling.getOversamplingFactor();
+        currentOversampledRate = currentSampleRate * oversamplingFactor;
+        lookaheadSamples = juce::jmax(1, juce::roundToInt((currentSampleRate * lookaheadTimeMs) / 1000.0));
+        oversampledLookaheadSamples = juce::jmax(1, juce::roundToInt((currentOversampledRate * lookaheadTimeMs) / 1000.0));
+
+        const int bufferSize = oversampledLookaheadSamples + 1;
         delayBuffer.setSize(getTotalNumOutputChannels(), bufferSize);
         gainReductionBuffer.assign((size_t) bufferSize, 1.0f);
         previousDrivenSamples.assign((size_t) getTotalNumOutputChannels(), 0.0f);
+
+        inputDriveSmoothed.reset(currentOversampledRate, parameterSmoothingMs * 0.001);
+        ceilingGainSmoothed.reset(currentOversampledRate, parameterSmoothingMs * 0.001);
+
         resetLimiterState();
         updateParameters();
+
+        inputDriveSmoothed.setCurrentAndTargetValue(inputDriveSmoothed.getTargetValue());
+        ceilingGainSmoothed.setCurrentAndTargetValue(ceilingGainSmoothed.getTargetValue());
+
+        const int oversamplingLatency = juce::roundToInt(oversampling.getLatencyInSamples());
+        setLatencySamples(lookaheadSamples + oversamplingLatency);
     }
 
     void MaximizerModule::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -81,28 +105,36 @@ namespace oxygen
         if (numChannels == 0 || numSamples == 0)
             return;
 
-        if (delayBuffer.getNumChannels() != numChannels || delayBuffer.getNumSamples() != lookaheadSamples + 1)
+        if (delayBuffer.getNumChannels() != numChannels || delayBuffer.getNumSamples() != oversampledLookaheadSamples + 1)
         {
-            delayBuffer.setSize(numChannels, lookaheadSamples + 1);
-            gainReductionBuffer.assign((size_t) (lookaheadSamples + 1), 1.0f);
+            delayBuffer.setSize(numChannels, oversampledLookaheadSamples + 1);
+            gainReductionBuffer.assign((size_t) (oversampledLookaheadSamples + 1), 1.0f);
             previousDrivenSamples.assign((size_t) numChannels, 0.0f);
             resetLimiterState();
         }
 
-        for (int sample = 0; sample < numSamples; ++sample)
+        juce::dsp::AudioBlock<float> outputBlock(buffer);
+        auto oversampledBlock = oversampling.processSamplesUp(outputBlock);
+        const int oversampledSamples = (int) oversampledBlock.getNumSamples();
+
+        for (int sample = 0; sample < oversampledSamples; ++sample)
         {
             float detectorPeak = 0.0f;
+            const float inputDrive = inputDriveSmoothed.getNextValue();
+            const float ceilingGain = ceilingGainSmoothed.getNextValue();
+
             for (int channel = 0; channel < numChannels; ++channel)
             {
-                const float drivenSample = buffer.getSample(channel, sample) * currentInputDrive;
+                auto* oversampledChannel = oversampledBlock.getChannelPointer((size_t) channel);
+                const float drivenSample = oversampledChannel[sample] * inputDrive;
                 delayBuffer.setSample(channel, delayWritePosition, drivenSample);
                 detectorPeak = juce::jmax(detectorPeak,
                                           estimateInterpolatedPeak(previousDrivenSamples[(size_t) channel], drivenSample));
                 previousDrivenSamples[(size_t) channel] = drivenSample;
             }
 
-            const float targetGain = (detectorPeak > currentCeilingGain && detectorPeak > 0.0f)
-                                   ? (currentCeilingGain / detectorPeak)
+            const float targetGain = (detectorPeak > ceilingGain && detectorPeak > 0.0f)
+                                   ? (ceilingGain / detectorPeak)
                                    : 1.0f;
             gainReductionBuffer[(size_t) delayWritePosition] = juce::jlimit(0.0f, 1.0f, targetGain);
 
@@ -115,7 +147,11 @@ namespace oxygen
             if (windowGain < currentGain)
                 currentGain = windowGain;
             else
-                currentGain = windowGain + (currentGain - windowGain) * releaseCoeff;
+                currentGain = windowGain + (currentGain - windowGain)
+                                          * computeAdaptiveReleaseCoefficient(currentOversampledRate,
+                                                                              lastRelease,
+                                                                              currentGain,
+                                                                              windowGain);
 
             for (int channel = 0; channel < numChannels; ++channel)
             {
@@ -123,11 +159,14 @@ namespace oxygen
                 if (!std::isfinite(outputSample))
                     outputSample = 0.0f;
 
-                buffer.setSample(channel, sample, outputSample);
+                auto* oversampledChannel = oversampledBlock.getChannelPointer((size_t) channel);
+                oversampledChannel[sample] = outputSample;
             }
 
             delayWritePosition = readPosition;
         }
+
+        oversampling.processSamplesDown(outputBlock);
 
         for (int ch = 0; ch < numChannels; ++ch)
         {
@@ -155,20 +194,17 @@ namespace oxygen
         lastRelease = rel;
         lastCeiling = ceil;
 
-        currentInputDrive = juce::Decibels::decibelsToGain(-thresh);
-        currentCeilingGain = juce::Decibels::decibelsToGain(ceil);
-        releaseCoeff = computeReleaseCoefficient(currentSampleRate, rel);
-
-        if (!std::isfinite(currentInputDrive))
-            currentInputDrive = 1.0f;
-        if (!std::isfinite(currentCeilingGain))
-            currentCeilingGain = 1.0f;
-        if (!std::isfinite(releaseCoeff))
-            releaseCoeff = 0.0f;
+        inputDriveSmoothed.setTargetValue(juce::Decibels::decibelsToGain(-thresh));
+        ceilingGainSmoothed.setTargetValue(juce::Decibels::decibelsToGain(ceil));
+        if (!std::isfinite(inputDriveSmoothed.getTargetValue()))
+            inputDriveSmoothed.setCurrentAndTargetValue(1.0f);
+        if (!std::isfinite(ceilingGainSmoothed.getTargetValue()))
+            ceilingGainSmoothed.setCurrentAndTargetValue(1.0f);
     }
 
     void MaximizerModule::resetLimiterState()
     {
+        oversampling.reset();
         delayBuffer.clear();
         std::fill(gainReductionBuffer.begin(), gainReductionBuffer.end(), 1.0f);
         std::fill(previousDrivenSamples.begin(), previousDrivenSamples.end(), 0.0f);

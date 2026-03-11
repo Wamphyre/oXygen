@@ -3,8 +3,11 @@
 
 namespace oxygen
 {
-    SpectrumAnalyzer::SpectrumAnalyzer(AudioBufferQueue& queueToUse, std::function<double()> sampleRateProviderToUse)
-        : audioQueue(queueToUse),
+    SpectrumAnalyzer::SpectrumAnalyzer(AudioBufferQueue& inputQueueToUse,
+                                       AudioBufferQueue& outputQueueToUse,
+                                       std::function<double()> sampleRateProviderToUse)
+        : inputAudioQueue(inputQueueToUse),
+          outputAudioQueue(outputQueueToUse),
           sampleRateProvider(std::move(sampleRateProviderToUse))
     {
         startTimerHz(30); // 30 FPS update
@@ -17,91 +20,183 @@ namespace oxygen
 
     void SpectrumAnalyzer::timerCallback()
     {
-        if (audioQueue.getNumReady() >= fftSize)
+        if (inputAudioQueue.getNumReady() < fftSize || outputAudioQueue.getNumReady() < fftSize)
+            return;
+
+        inputAudioQueue.pop(inputLeftFifo.data(), inputRightFifo.data(), fftSize);
+        outputAudioQueue.pop(outputLeftFifo.data(), outputRightFifo.data(), fftSize);
+
+        updateSpectrumFrame(inputLeftFifo, inputRightFifo, inputFftData);
+        updateSpectrumFrame(outputLeftFifo, outputRightFifo, outputFftData);
+        updateSmoothedSpectrum(inputFftData, smoothedInputDb);
+        updateSmoothedSpectrum(outputFftData, smoothedOutputDb);
+        displaySpectraInitialized = true;
+        hasInputFrame = true;
+        hasOutputFrame = true;
+        repaint();
+    }
+
+    void SpectrumAnalyzer::updateSpectrumFrame(const std::array<float, fftSize>& leftChannel,
+                                               const std::array<float, fftSize>& rightChannel,
+                                               std::array<float, fftSize * 2>& magnitudeDestination)
+    {
+        std::array<float, fftSize * 2> leftFft {};
+        std::array<float, fftSize * 2> rightFft {};
+
+        std::copy(leftChannel.begin(), leftChannel.end(), leftFft.begin());
+        std::copy(rightChannel.begin(), rightChannel.end(), rightFft.begin());
+
+        window.multiplyWithWindowingTable(leftFft.data(), fftSize);
+        window.multiplyWithWindowingTable(rightFft.data(), fftSize);
+        forwardFFT.performFrequencyOnlyForwardTransform(leftFft.data());
+        forwardFFT.performFrequencyOnlyForwardTransform(rightFft.data());
+
+        for (int bin = 0; bin < fftBins; ++bin)
         {
-            juce::FloatVectorOperations::clear(fifo.data(), fftSize);
-            audioQueue.pop(fifo.data(), fftSize);
-            
-            // Apply windowing and FFT
-            std::copy(fifo.begin(), fifo.begin() + fftSize, fftData.begin());
-            window.multiplyWithWindowingTable(fftData.data(), fftSize);
-            forwardFFT.performFrequencyOnlyForwardTransform(fftData.data());
-            
-            nextBlockReady = true;
-            repaint();
+            const float leftMagnitude = leftFft[(size_t) bin];
+            const float rightMagnitude = rightFft[(size_t) bin];
+            magnitudeDestination[(size_t) bin] = std::sqrt(0.5f
+                                                           * ((leftMagnitude * leftMagnitude)
+                                                            + (rightMagnitude * rightMagnitude)));
         }
+    }
+
+    void SpectrumAnalyzer::updateSmoothedSpectrum(const std::array<float, fftSize * 2>& fftMagnitudes,
+                                                  std::array<float, fftBins>& smoothedDestination)
+    {
+        constexpr float smoothing = 0.86f;
+        for (int bin = 0; bin < fftBins; ++bin)
+        {
+            const float magnitude = juce::jmax(fftMagnitudes[(size_t) bin], 1.0e-9f);
+            const float db = juce::jlimit(-100.0f,
+                                          0.0f,
+                                          juce::Decibels::gainToDecibels(magnitude)
+                                            - juce::Decibels::gainToDecibels((float) fftSize));
+
+            if (!displaySpectraInitialized)
+                smoothedDestination[(size_t) bin] = db;
+            else
+                smoothedDestination[(size_t) bin] = (smoothedDestination[(size_t) bin] * smoothing)
+                                                 + (db * (1.0f - smoothing));
+        }
+
     }
 
     void SpectrumAnalyzer::paint(juce::Graphics& g)
     {
         g.fillAll(juce::Colours::black.withAlpha(0.2f)); // More transparent background for overlay
         
-        if (nextBlockReady)
+        if (hasInputFrame || hasOutputFrame)
         {
             drawFrame(g);
         }
     }
     
+    juce::Path SpectrumAnalyzer::buildSpectrumPath(const std::array<float, fftBins>& magnitudesDb,
+                                                   juce::Rectangle<float> bounds,
+                                                   float sampleRate) const
+    {
+        juce::Path spectrumPath;
+        bool started = false;
+        const float height = bounds.getHeight();
+        const float minFreq = 20.0f;
+        const float maxFreq = juce::jmax(minFreq * 2.0f, juce::jmin(20000.0f, sampleRate * 0.5f));
+
+        for (int i = 1; i < fftBins; ++i)
+        {
+            const float freq = (float) i * (sampleRate / (float) fftSize);
+            if (freq < minFreq || freq > maxFreq)
+                continue;
+
+            const float x = juce::jmap(std::log10(freq),
+                                       std::log10(minFreq),
+                                       std::log10(maxFreq),
+                                       bounds.getX(),
+                                       bounds.getRight());
+
+            const float normY = juce::jmap(magnitudesDb[(size_t) i], -100.0f, 0.0f, 0.0f, 1.0f);
+            const float y = bounds.getBottom() - (normY * height);
+
+            if (!started)
+            {
+                spectrumPath.startNewSubPath(x, y);
+                started = true;
+            }
+            else
+            {
+                spectrumPath.lineTo(x, y);
+            }
+        }
+
+        return spectrumPath;
+    }
+
     void SpectrumAnalyzer::drawFrame(juce::Graphics& g)
     {
         auto bounds = getLocalBounds().toFloat();
-        auto width = bounds.getWidth();
-        auto height = bounds.getHeight();
-        
-        // Premium Neon Cyan Gradient
-        juce::ColourGradient spectrumGradient(juce::Colours::cyan.withAlpha(0.9f), 0, height * 0.5f,
-                                            juce::Colours::magenta.withAlpha(0.9f), width, height * 0.5f, false);
-        g.setGradientFill(spectrumGradient);
-
-        juce::Path spectrumPath;
-        bool started = false;
-        
+        const auto width = bounds.getWidth();
+        const auto height = bounds.getHeight();
         const float sampleRate = (sampleRateProvider != nullptr) ? (float) sampleRateProvider() : 44100.0f;
         const float minFreq = 20.0f;
         const float maxFreq = juce::jmax(minFreq * 2.0f, juce::jmin(20000.0f, sampleRate * 0.5f));
         
-        for (int i = 1; i < fftSize / 2; ++i)
+        const auto originalPath = hasInputFrame
+                                ? buildSpectrumPath(smoothedInputDb, bounds, sampleRate)
+                                : juce::Path {};
+        const auto processedPath = hasOutputFrame
+                                 ? buildSpectrumPath(smoothedOutputDb, bounds, sampleRate)
+                                 : juce::Path {};
+
+        if (!processedPath.isEmpty())
         {
-            float freq = (float)i * (sampleRate / (float)fftSize);
-            if (freq < minFreq || freq > maxFreq)
-                continue;
-            
-            // Logarithmic mapping for X
-            float x = juce::jmap(std::log10(freq), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
-            
-            float magnitude = fftData[i];
-            float db = juce::Decibels::gainToDecibels(magnitude) - juce::Decibels::gainToDecibels((float)fftSize); 
-            
-            if (db < -100.0f) db = -100.0f;
-            
-            float normY = juce::jmap(db, -100.0f, 0.0f, 0.0f, 1.0f);
-            float y = height - (normY * height);
-            
-            if (x >= 0 && x <= width)
+            juce::ColourGradient processedGradient(juce::Colours::cyan.withAlpha(0.95f), bounds.getX(), height * 0.5f,
+                                                   juce::Colours::magenta.withAlpha(0.95f), bounds.getRight(), height * 0.5f, false);
+            g.setGradientFill(processedGradient);
+            g.strokePath(processedPath, juce::PathStrokeType(1.8f));
+
+            auto processedFill = processedPath;
+            processedFill.lineTo(bounds.getRight(), bounds.getBottom());
+            processedFill.lineTo(bounds.getX(), bounds.getBottom());
+            processedFill.closeSubPath();
+
+            juce::ColourGradient fillGradient(juce::Colours::cyan.withAlpha(0.16f), 0, 0,
+                                              juce::Colours::transparentBlack, 0, height, false);
+            g.setGradientFill(fillGradient);
+            g.fillPath(processedFill);
+        }
+
+        if (!originalPath.isEmpty())
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.72f));
+            g.strokePath(originalPath, juce::PathStrokeType(1.25f));
+        }
+
+        if (hasInputFrame && hasOutputFrame)
+        {
+            for (int bin = 2; bin < fftBins; bin += 2)
             {
-                if (!started)
-                {
-                    spectrumPath.startNewSubPath(x, y);
-                    started = true;
-                }
-                else
-                {
-                    spectrumPath.lineTo(x, y);
-                }
+                const float freq = (float) bin * (sampleRate / (float) fftSize);
+                if (freq < minFreq || freq > maxFreq)
+                    continue;
+
+                const float x = juce::jmap(std::log10(freq),
+                                           std::log10(minFreq),
+                                           std::log10(maxFreq),
+                                           bounds.getX(),
+                                           bounds.getRight());
+                const float inputDb = smoothedInputDb[(size_t) bin];
+                const float outputDb = smoothedOutputDb[(size_t) bin];
+                const float deltaDb = outputDb - inputDb;
+                if (std::abs(deltaDb) < 0.75f)
+                    continue;
+
+                const float inputY = bounds.getBottom() - (juce::jmap(inputDb, -100.0f, 0.0f, 0.0f, 1.0f) * height);
+                const float outputY = bounds.getBottom() - (juce::jmap(outputDb, -100.0f, 0.0f, 0.0f, 1.0f) * height);
+                const float alpha = juce::jlimit(0.08f, 0.34f, std::abs(deltaDb) / 10.0f);
+                g.setColour((deltaDb > 0.0f ? juce::Colours::magenta : juce::Colours::orange).withAlpha(alpha));
+                g.drawLine(x, inputY, x, outputY, 1.0f);
             }
         }
-        
-        g.strokePath(spectrumPath, juce::PathStrokeType(1.5f));
-        
-        // Fill with subtle transparency
-        spectrumPath.lineTo(width, height);
-        spectrumPath.lineTo(0, height);
-        spectrumPath.closeSubPath();
-        
-        juce::ColourGradient fillGradient(juce::Colours::cyan.withAlpha(0.2f), 0, 0,
-                                         juce::Colours::transparentBlack, 0, height, false);
-        g.setGradientFill(fillGradient);
-        g.fillPath(spectrumPath);
 
         // Draw Frequency Grid & Labels
         g.setColour(juce::Colours::white.withAlpha(0.2f));
@@ -118,28 +213,45 @@ namespace oxygen
 
         for (const auto& line : lines)
         {
-            float x = juce::jmap(std::log10(line.freq), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
-            if (x >= 0 && x <= width)
+            const float x = juce::jmap(std::log10(line.freq),
+                                       std::log10(minFreq),
+                                       std::log10(maxFreq),
+                                       bounds.getX(),
+                                       bounds.getRight());
+            if (x >= bounds.getX() && x <= bounds.getRight())
             {
-                g.drawVerticalLine((int)x, 0.0f, height);
-                g.drawText(line.label, (int)x + 2, (int)height - 12, 30, 12, juce::Justification::left, false);
+                g.drawVerticalLine((int) x, bounds.getY(), bounds.getBottom());
+                g.drawText(line.label, (int) x + 2, (int) bounds.getBottom() - 12, 30, 12, juce::Justification::left, false);
             }
         }
+
+        const auto legendBounds = bounds.removeFromTop(18.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.78f));
+        g.drawLine(legendBounds.getX(), legendBounds.getCentreY(),
+                   legendBounds.getX() + 16.0f, legendBounds.getCentreY(), 1.2f);
+        g.drawText("Original", (int) legendBounds.getX() + 22, (int) legendBounds.getY(), 64, (int) legendBounds.getHeight(),
+                   juce::Justification::centredLeft, false);
+
+        g.setColour(juce::Colours::cyan.withAlpha(0.90f));
+        g.drawLine(legendBounds.getX() + 92.0f, legendBounds.getCentreY(),
+                   legendBounds.getX() + 108.0f, legendBounds.getCentreY(), 1.8f);
+        g.drawText("Processed", (int) legendBounds.getX() + 114, (int) legendBounds.getY(), 76, (int) legendBounds.getHeight(),
+                   juce::Justification::centredLeft, false);
         
         // Visualize "Hot Zones" (Mud/Resonance areas)
         // 200-500Hz often problematic 'mud' area
-        float mudX1 = juce::jmap(std::log10(200.0f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
-        float mudX2 = juce::jmap(std::log10(500.0f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
+        const float mudX1 = juce::jmap(std::log10(200.0f), std::log10(minFreq), std::log10(maxFreq), bounds.getX(), bounds.getRight());
+        const float mudX2 = juce::jmap(std::log10(500.0f), std::log10(minFreq), std::log10(maxFreq), bounds.getX(), bounds.getRight());
         
         g.setColour(juce::Colours::orange.withAlpha(0.05f));
-        g.fillRect(juce::Rectangle<float>(mudX1, 0, mudX2 - mudX1, height));
+        g.fillRect(juce::Rectangle<float>(mudX1, bounds.getY(), mudX2 - mudX1, height));
         
         // High shhh area 4k-8k
-        float harshX1 = juce::jmap(std::log10(4000.0f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
-        float harshX2 = juce::jmap(std::log10(8000.0f), std::log10(minFreq), std::log10(maxFreq), 0.0f, width);
+        const float harshX1 = juce::jmap(std::log10(4000.0f), std::log10(minFreq), std::log10(maxFreq), bounds.getX(), bounds.getRight());
+        const float harshX2 = juce::jmap(std::log10(8000.0f), std::log10(minFreq), std::log10(maxFreq), bounds.getX(), bounds.getRight());
         
         g.setColour(juce::Colours::yellow.withAlpha(0.05f));
-        g.fillRect(juce::Rectangle<float>(harshX1, 0, harshX2 - harshX1, height));
+        g.fillRect(juce::Rectangle<float>(harshX1, bounds.getY(), harshX2 - harshX1, height));
     }
 
     void SpectrumAnalyzer::resized()

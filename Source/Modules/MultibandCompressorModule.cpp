@@ -8,6 +8,7 @@ namespace oxygen
     namespace
     {
         constexpr float minCrossoverSpacingHz = 20.0f;
+        constexpr float softKneeWidthDb = 4.5f;
 
         float computeTimeCoefficient(double sampleRate, float timeMs)
         {
@@ -264,8 +265,8 @@ namespace oxygen
                 || std::abs(rl - lastBandParams[i].release) > 0.001f)
             {
                 lastBandParams[i] = { t, r, a, rl };
-                bandRuntimeStates[i].thresholdGain = juce::Decibels::decibelsToGain(t, -200.0f);
-                bandRuntimeStates[i].ratioInverse = 1.0f / r;
+                bandRuntimeStates[i].thresholdDb = t;
+                bandRuntimeStates[i].ratioInverseMinusOne = (1.0f / r) - 1.0f;
                 bandRuntimeStates[i].attackCoeff = computeTimeCoefficient(sampleRate, a);
                 bandRuntimeStates[i].releaseCoeff = computeTimeCoefficient(sampleRate, rl);
             }
@@ -283,16 +284,45 @@ namespace oxygen
 
         for (int sample = 0; sample < numSamples; ++sample)
         {
-            float detector = 0.0f;
+            float peakDetector = 0.0f;
+            double sumSquares = 0.0;
             for (int channel = 0; channel < numChannels; ++channel)
-                detector = juce::jmax(detector, std::abs(bandBuffer.getReadPointer(channel)[sample]));
+            {
+                const float channelSample = bandBuffer.getReadPointer(channel)[sample];
+                peakDetector = juce::jmax(peakDetector, std::abs(channelSample));
+                sumSquares += (double) channelSample * (double) channelSample;
+            }
+
+            const float rmsDetector = std::sqrt((float) (sumSquares / (double) numChannels));
+            const float detector = juce::jmax(peakDetector * 0.72f, rmsDetector * 1.10f);
 
             const float coefficient = (detector > state.envelope) ? state.attackCoeff : state.releaseCoeff;
             state.envelope = coefficient * state.envelope + (1.0f - coefficient) * detector;
 
             float gain = 1.0f;
-            if (state.envelope > state.thresholdGain && state.thresholdGain > 0.0f)
-                gain = std::pow(state.envelope / state.thresholdGain, state.ratioInverse - 1.0f);
+            if (state.envelope > 0.0f)
+            {
+                const float envelopeDb = juce::Decibels::gainToDecibels(state.envelope, -160.0f);
+                const float overDb = envelopeDb - state.thresholdDb;
+                float gainReductionDb = 0.0f;
+
+                if (2.0f * overDb <= -softKneeWidthDb)
+                {
+                    gainReductionDb = 0.0f;
+                }
+                else if (2.0f * std::abs(overDb) < softKneeWidthDb)
+                {
+                    const float kneeDelta = overDb + (softKneeWidthDb * 0.5f);
+                    gainReductionDb = state.ratioInverseMinusOne
+                                    * ((kneeDelta * kneeDelta) / (2.0f * softKneeWidthDb));
+                }
+                else if (overDb > 0.0f)
+                {
+                    gainReductionDb = overDb * state.ratioInverseMinusOne;
+                }
+
+                gain = juce::Decibels::decibelsToGain(gainReductionDb);
+            }
 
             if (!std::isfinite(gain))
                 gain = 1.0f;
