@@ -33,11 +33,6 @@ The current codebase is **cross-platform by design**, but the most actively used
 - **Mono / Stereo Compatibility**: The plugin supports mono and stereo bus layouts and routes the chain coherently through to the final output.
 - **Single and Double Precision Host Paths**: The plugin accepts both float and double precision processing from the host. DSP refinement is still ongoing module by module.
 
-### Interface
-- **Custom SVG-Based Branding**: Scalable vector graphics and custom theme assets.
-- **Focused Mastering Layout**: Top analyzer, side meters, and a vertical processing rack for quick access to each stage.
-- **Assistant Feedback Flow**: A dedicated listening dialog appears during analysis, with progress feedback and an apply confirmation step after the listening pass.
-
 ## System Requirements
 
 ### macOS
