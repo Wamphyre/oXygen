@@ -15,6 +15,19 @@ The current codebase is **cross-platform by design**. **macOS VST3** remains the
 
 ![oXygen Screenshot](assets/screenshot.png)
 
+## Index
+
+- [Features](#features)
+- [System Requirements](#system-requirements)
+- [macOS Requirements](#macos)
+- [Windows Requirements](#windows)
+- [Linux Requirements](#linux)
+- [Build from Source](#build-from-source)
+- [Usage](#usage)
+- [Usage Guide](#usage-guide)
+- [Manual Control](#manual-control)
+- [Support & Donations](#support--donations)
+
 ## Features
 
 ### Core Functionality
