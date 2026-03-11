@@ -2,41 +2,36 @@ cmake_minimum_required(VERSION 3.22)
 
 project(oXygen VERSION 1.0.0)
 
-# Set C++ standard
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# System Detection & Optimization Flags
+set(OXYGEN_PLATFORM "Unknown")
+
 if(APPLE)
-    message(STATUS "🍏 Detected System: macOS")
-    # macOS Specific Optimizations
+    set(OXYGEN_PLATFORM "macOS")
+    message(STATUS "Detected System: ${OXYGEN_PLATFORM}")
     add_compile_options(-O3 -march=native -funroll-loops -flto)
-    
 elseif(MSVC)
-    message(STATUS "🪟 Detected System: Windows (MSVC)")
-    # Windows/MSVC Specific Optimizations
+    set(OXYGEN_PLATFORM "Windows (MSVC)")
+    message(STATUS "Detected System: ${OXYGEN_PLATFORM}")
     add_compile_options(/MP /W4 /permissive- /O2 /Oi /Ot /GF /Gy /arch:AVX2)
-    
-elseif(UNIX AND NOT APPLE)
-    message(STATUS "🐧 Detected System: Linux/Unix")
-    # Linux Specific Optimizations
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(OXYGEN_PLATFORM "Linux")
+    message(STATUS "Detected System: ${OXYGEN_PLATFORM}")
     add_compile_options(-O3 -march=native)
-    
+else()
+    message(WARNING "Detected unsupported system: ${CMAKE_SYSTEM_NAME}")
 endif()
 
-# Enable LTO (Interprocedural Optimization)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
 if(ipo_supported)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
-# Add JUCE
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE")
     add_subdirectory(JUCE)
 else()
-    # Add JUCE using FetchContent (ensure it downloads if missing)
     include(FetchContent)
     FetchContent_Declare(
         juce
@@ -101,6 +96,12 @@ target_sources(oXygen
         Source/AI/InferenceEngine.cpp
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-x11-3.0)
+    pkg_check_modules(WEBKIT2GTK REQUIRED IMPORTED_TARGET webkit2gtk-4.1)
+endif()
+
 # Link against JUCE modules
 target_link_libraries(oXygen
     PRIVATE
@@ -112,6 +113,10 @@ target_link_libraries(oXygen
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(oXygen PRIVATE PkgConfig::GTK3 PkgConfig::WEBKIT2GTK)
+endif()
 
 # Fix for VST2/VST3 compatibility error on new plugins
 target_compile_definitions(oXygen

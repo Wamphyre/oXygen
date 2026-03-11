@@ -2,12 +2,12 @@
 
 **oXygen** is a free and open-source mastering plugin built with C++ and JUCE. The project is focused on a practical mastering workflow: corrective EQ, multiband control, stereo shaping, final loudness, and an automatic Master Assistant that listens to the incoming mix and writes settings into the modules.
 
-The current codebase is **cross-platform by design**, but the most actively used and validated path right now is **macOS VST3**. Windows and Linux build paths exist in CMake and remain part of the roadmap, but they still need more validation, packaging work, and real-world testing.
+The current codebase is **cross-platform by design**. **macOS VST3** remains the primary day-to-day development path, and the **Linux VST3** build path is now validated through both `CMake` and `build.sh`. **Windows** support remains part of the roadmap and still needs more validation, packaging work, and real-world testing.
 
 ![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
 ![Format](https://img.shields.io/badge/format-VST3-blue)
 ![Codebase](https://img.shields.io/badge/codebase-macOS%20%7C%20Windows%20%7C%20Linux-blue)
-![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Windows%2FLinux%20pending-lightgrey)
+![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Linux%20build%20validated%20%7C%20Windows%20pending-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Me-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wamphyre94078)
 
@@ -47,8 +47,8 @@ The current codebase is **cross-platform by design**, but the most actively used
 
 ### Linux
 - **Format**: VST3
-- **Status**: CMake path is present, but Linux support is still under active development and needs more testing
-- **Build Path**: Manual CMake workflow
+- **Status**: Validated VST3 build path with `build.sh` and manual CMake
+- **Build Path**: `build.sh` or manual CMake workflow
 
 ## Build from Source
 
@@ -126,6 +126,9 @@ The current codebase is **cross-platform by design**, but the most actively used
 - **GCC or Clang** with C++20 support
 - **CMake 3.22+**
 - **Git**
+- **pkg-config**
+- **GTK 3 development headers** (`gtk+-x11-3.0`)
+- **WebKit2GTK 4.1 development headers** (`webkit2gtk-4.1`)
 - **Ninja** or **Make**
 
 #### Build Steps
@@ -135,13 +138,16 @@ The current codebase is **cross-platform by design**, but the most actively used
    cd oXygen
    ```
 
-2. **Configure**
+2. **Build with the helper script**
    ```bash
-   cmake -B build -DCMAKE_BUILD_TYPE=Release
+   ./build.sh
    ```
 
-3. **Build**
+   The script auto-detects Linux, prefers `Ninja` when available, falls back to `Unix Makefiles`, and places the final bundle in `releases/oXygen.vst3`.
+
+3. **Or configure manually**
    ```bash
+   cmake -B build -DCMAKE_BUILD_TYPE=Release
    cmake --build build --config Release
    ```
 
@@ -150,7 +156,7 @@ The current codebase is **cross-platform by design**, but the most actively used
    releases/oXygen.vst3
    ```
 
-> Note: Linux support is still work in progress and should be treated as experimental until more validation is completed.
+> Note: on Linux, the build requires the `pkg-config` entries for `gtk+-x11-3.0` and `webkit2gtk-4.1` to be available before running CMake.
 
 ## Usage
 
@@ -177,5 +183,5 @@ If you find oXygen useful and want to support its development, consider supporti
 
 ---
 
-Built for iterative mastering development, with more platform validation and DSP refinement still ahead.
+Built for iterative mastering development, with further Windows validation, packaging work, and DSP refinement still ahead.
 
