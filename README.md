@@ -193,7 +193,3 @@ If you find oXygen useful and want to support its development, consider supporti
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/wamphyre94078)
 
 ---
-
-Built for iterative mastering development, with further Windows packaging work, broader host validation, and DSP refinement still ahead.
-
-
