@@ -5,8 +5,8 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
 ![Format](https://img.shields.io/badge/format-VST3-blue)
 ![Codebase](https://img.shields.io/badge/codebase-macOS%20%7C%20Windows%20%7C%20Linux-blue)
-![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Linux%20build%20validated%20%7C%20Windows%20manual%20build%20validated-green)
-![License](https://img.shields.io/badge/license-MIT-green)
+![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Windows%20active%20%7C%20Linux%20active-green)
+![License](https://img.shields.io/badge/license-BSD--3--Clause-green)
 [![ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Me-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wamphyre94078)
 
 ![oXygen Logo](assets/oxygen_logo.svg)
