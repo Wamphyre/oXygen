@@ -2,12 +2,12 @@
 
 **oXygen** is a free and open-source mastering plugin built with C++ and JUCE. The project is focused on a practical mastering workflow: corrective EQ, multiband control, stereo shaping, final loudness, and an automatic Master Assistant that listens to the incoming mix and writes settings into the modules.
 
-The current codebase is **cross-platform by design**. **macOS VST3** remains the primary day-to-day development path, and the **Linux VST3** build path is now validated through both `CMake` and `build.sh`. **Windows** support remains part of the roadmap and still needs more validation, packaging work, and real-world testing.
+The current codebase is **cross-platform by design**. **macOS VST3** remains the primary day-to-day development path, the **Linux VST3** build path is validated through both `CMake` and `build.sh`, and the **Windows VST3** manual build path is now validated with `CMake` plus **Visual Studio 2022 / MSVC**. Packaging and broader host testing on Windows still need more iteration.
 
 ![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
 ![Format](https://img.shields.io/badge/format-VST3-blue)
 ![Codebase](https://img.shields.io/badge/codebase-macOS%20%7C%20Windows%20%7C%20Linux-blue)
-![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Linux%20build%20validated%20%7C%20Windows%20pending-lightgrey)
+![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Linux%20build%20validated%20%7C%20Windows%20manual%20build%20validated-green)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Me-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wamphyre94078)
 
@@ -55,8 +55,8 @@ The current codebase is **cross-platform by design**. **macOS VST3** remains the
 
 ### Windows
 - **Format**: VST3
-- **Status**: Codebase and CMake path exist, but validation and packaging are still in progress
-- **Build Path**: Manual CMake / Visual Studio workflow
+- **Status**: Manual `CMake` + `Visual Studio 2022 / MSVC` build path validated; packaging and broader host validation are still in progress
+- **Build Path**: Manual `CMake` / Visual Studio workflow with automatic Windows platform detection in `CMakeLists.txt`
 
 ### Linux
 - **Format**: VST3
@@ -116,7 +116,7 @@ The current codebase is **cross-platform by design**. **macOS VST3** remains the
 
 2. **Configure**
    ```powershell
-   cmake -B build
+   cmake -S . -B build -G "Visual Studio 17 2022" -A x64
    ```
 
 3. **Build**
@@ -129,7 +129,7 @@ The current codebase is **cross-platform by design**. **macOS VST3** remains the
    releases/oXygen.vst3
    ```
 
-> Note: Windows support is not yet considered fully validated. Expect further iteration on packaging, testing, and deployment details.
+> Note: `CMake` now auto-detects the Windows environment and applies Windows-specific compiler settings automatically. The manual build path has been validated with **Visual Studio 2022 + MSVC**, but packaging and wider host testing still need more iteration.
 
 ---
 
@@ -196,5 +196,5 @@ If you find oXygen useful and want to support its development, consider supporti
 
 ---
 
-Built for iterative mastering development, with further Windows validation, packaging work, and DSP refinement still ahead.
+Built for iterative mastering development, with further Windows packaging work, broader host validation, and DSP refinement still ahead.
 
