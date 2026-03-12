@@ -2,8 +2,6 @@
 
 **oXygen** is a free and open-source mastering plugin built with C++ and JUCE. The project is focused on a practical mastering workflow: corrective EQ, multiband control, stereo shaping, final loudness, and an automatic Master Assistant that listens to the incoming mix and writes settings into the modules.
 
-The current codebase is **cross-platform by design**. **macOS VST3** remains the primary day-to-day development path, the **Linux VST3** build path is validated through both `CMake` and `build.sh`, and the **Windows VST3** manual build path is now validated with `CMake` plus **Visual Studio 2022 / MSVC**. Packaging and broader host testing on Windows still need more iteration.
-
 ![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
 ![Format](https://img.shields.io/badge/format-VST3-blue)
 ![Codebase](https://img.shields.io/badge/codebase-macOS%20%7C%20Windows%20%7C%20Linux-blue)
@@ -197,4 +195,5 @@ If you find oXygen useful and want to support its development, consider supporti
 ---
 
 Built for iterative mastering development, with further Windows packaging work, broader host validation, and DSP refinement still ahead.
+
 
