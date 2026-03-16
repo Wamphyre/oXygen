@@ -181,10 +181,10 @@ namespace
         }
 
         destinationSampleRate = reader->sampleRate;
-        const int64_t maxExcerptSamples = juce::jmax<int64_t>(1024,
-                                                              (int64_t) std::llround(destinationSampleRate * referenceAnalysisWindowSeconds));
-        const int64_t excerptLengthSamples = juce::jmin(reader->lengthInSamples, maxExcerptSamples);
-        const int64_t excerptStartSample = findRepresentativeExcerptStart(*reader, excerptLengthSamples);
+        const juce::int64 requestedExcerptSamples = (juce::int64) std::llround(destinationSampleRate * referenceAnalysisWindowSeconds);
+        const juce::int64 maxExcerptSamples = std::max<juce::int64>(1024, requestedExcerptSamples);
+        const juce::int64 excerptLengthSamples = std::min<juce::int64>(reader->lengthInSamples, maxExcerptSamples);
+        const juce::int64 excerptStartSample = findRepresentativeExcerptStart(*reader, excerptLengthSamples);
         const int samplesToRead = (int) excerptLengthSamples;
 
         juce::AudioBuffer<float> rawBuffer(numChannels, samplesToRead);
