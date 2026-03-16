@@ -1,15 +1,72 @@
 #include "MainComponent.h"
 #include "Theme.h"
 #include "../PluginProcessor.h"
-#include "../Assets.h"
+#include <BinaryData.h>
 #include <memory>
 
 using namespace oxygen;
 
 namespace
 {
+    constexpr int defaultGuiWidth = 1100;
+    constexpr int defaultGuiHeight = 1240;
     constexpr int headerHeight = 96;
     constexpr int meterTextHeight = 30;
+    constexpr int headerButtonWidth = 172;
+    constexpr int headerButtonGap = 8;
+    constexpr int dialogTextWidth = 360;
+    constexpr int dialogTextHeight = 88;
+
+    class DialogMessageComponent final : public juce::Component
+    {
+    public:
+        explicit DialogMessageComponent(juce::String messageText)
+            : text(std::move(messageText))
+        {
+            setInterceptsMouseClicks(false, false);
+            setSize(dialogTextWidth, dialogTextHeight);
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            juce::AttributedString attributedText;
+            attributedText.append(text,
+                                  oxygen::Theme::Fonts::getBody().withHeight(14.0f),
+                                  oxygen::Theme::Colors::OnSurface);
+            attributedText.setJustification(juce::Justification::centred);
+            attributedText.setWordWrap(juce::AttributedString::WordWrap::byWord);
+
+            juce::TextLayout layout;
+            const auto contentBounds = getLocalBounds().reduced(8, 8);
+            layout.createLayout(attributedText, (float) contentBounds.getWidth());
+
+            const auto layoutHeight = (int) std::ceil(layout.getHeight());
+            const auto y = contentBounds.getY()
+                         + juce::jmax(0, (contentBounds.getHeight() - layoutHeight) / 2);
+            layout.draw(g, juce::Rectangle<float>((float) contentBounds.getX(),
+                                                  (float) y,
+                                                  (float) contentBounds.getWidth(),
+                                                  (float) layoutHeight));
+        }
+
+    private:
+        juce::String text;
+    };
+
+    juce::String shortenForDialog(const juce::String& text, int maxLength)
+    {
+        if (text.length() <= maxLength)
+            return text;
+
+        const auto headLength = juce::jmax(8, maxLength / 2 - 2);
+        const auto tailLength = juce::jmax(8, maxLength - headLength - 3);
+        return text.substring(0, headLength) + "..." + text.substring(text.length() - tailLength);
+    }
+
+    std::unique_ptr<juce::Component> createDialogMessageComponent(const juce::String& text)
+    {
+        return std::make_unique<DialogMessageComponent>(text);
+    }
 }
 
 MainComponent::MainComponent(OxygenAudioProcessor& p)
@@ -37,9 +94,28 @@ MainComponent::MainComponent(OxygenAudioProcessor& p)
     addAndMakeVisible(outputMeterL);
     addAndMakeVisible(outputMeterR);
 
-    auto iconXml = juce::parseXML(oxygen::Assets::oxygenIconSvg);
-    if (iconXml) iconDrawable = juce::Drawable::createFromSVG(*iconXml);
-    
+    if (auto iconXml = juce::parseXML(juce::String::fromUTF8(BinaryData::oxygen_icon_svg,
+                                                             BinaryData::oxygen_icon_svgSize)))
+    {
+        iconDrawable = juce::Drawable::createFromSVG(*iconXml);
+    }
+
+    if (auto referenceIconXml = juce::parseXML(juce::String::fromUTF8(BinaryData::reference_icon_svg,
+                                                                      BinaryData::reference_icon_svgSize)))
+    {
+        referenceIconDrawable = juce::Drawable::createFromSVG(*referenceIconXml);
+    }
+
+    referenceButton = std::make_unique<juce::DrawableButton>("Reference", juce::DrawableButton::ImageAboveTextLabel);
+    if (referenceIconDrawable)
+        referenceButton->setImages(referenceIconDrawable.get());
+    referenceButton->setButtonText("REFERENCE");
+    referenceButton->onClick = [this]
+    {
+        startReferenceWorkflow();
+    };
+    addAndMakeVisible(referenceButton.get());
+
     // Assistant Button
     masterAssistButton = std::make_unique<juce::DrawableButton>("Master Assist", juce::DrawableButton::ImageAboveTextLabel);
     if (iconDrawable)
@@ -54,7 +130,8 @@ MainComponent::MainComponent(OxygenAudioProcessor& p)
     };
     addAndMakeVisible(masterAssistButton.get());
     
-    setSize(1100, 1000); // Increased default size for better visibility
+    // Keep the full mastering chain visible without forcing viewport scroll.
+    setSize(defaultGuiWidth, defaultGuiHeight);
     startTimerHz(60);   // Smoother 60fps update
 }
 
@@ -72,7 +149,7 @@ void MainComponent::timerCallback()
     outputMeterL.setLevel(audioProcessor.getOutputLevel(0));
     outputMeterR.setLevel(audioProcessor.getOutputLevel(1));
 
-    if (assistantUiState == AssistantUiState::listening)
+    if (assistantUiState != AssistantUiState::idle)
     {
         const auto nowMs = juce::Time::getMillisecondCounterHiRes();
         const auto elapsedMs = nowMs - assistantListenStartMs;
@@ -93,10 +170,21 @@ void MainComponent::resized()
     // Header
     auto headerArea = area.removeFromTop(headerHeight);
     
+    auto buttonGroupArea = headerArea.removeFromRight((headerButtonWidth * 2) + headerButtonGap + 12).reduced(6, 10);
+    buttonGroupArea.removeFromLeft(4);
+
+    if (referenceButton.get() != nullptr)
+    {
+        auto referenceArea = buttonGroupArea.removeFromLeft(headerButtonWidth);
+        referenceButton->setBounds(referenceArea);
+    }
+
+    buttonGroupArea.removeFromLeft(headerButtonGap);
+
     if (masterAssistButton.get() != nullptr)
     {
-        auto buttonArea = headerArea.removeFromRight(190).reduced(6, 10);
-        masterAssistButton->setBounds(buttonArea);
+        auto masterArea = buttonGroupArea.removeFromLeft(headerButtonWidth);
+        masterAssistButton->setBounds(masterArea);
     }
     
     // Spectrum Analyzer (Top 120px - Slightly more compact)
@@ -200,111 +288,155 @@ void MainComponent::startAssistantListening()
     if (assistantUiState != AssistantUiState::idle)
         return;
 
-    closeAssistantListenWindow();
+    beginListeningSession(AssistantUiState::listeningMasterAssistant,
+                          "LISTENING...",
+                          "Master Assistant Listening",
+                          "Listening to your mix now.\n"
+                          "Loudness may rise after processing.\n"
+                          "Play the loudest section if needed.");
+}
 
-    audioProcessor.resetAssistantAnalysisCapture();
-    assistantUiState = AssistantUiState::listening;
-    assistantListenProgress = 0.0;
-    assistantListenStartMs = juce::Time::getMillisecondCounterHiRes();
+void MainComponent::startReferenceWorkflow()
+{
+    if (assistantUiState != AssistantUiState::idle)
+        return;
 
-    if (masterAssistButton != nullptr)
-    {
-        masterAssistButton->setButtonText("LISTENING...");
-        masterAssistButton->setEnabled(false);
-    }
-
-    auto* listenWindow = new juce::AlertWindow("Master Assistant Listening",
-                                               "The plugin is listening to your mix.\n"
-                                               "Volume may increase after processing.\n"
-                                               "If no signal is detected, play the loudest section of your mix.",
-                                               juce::AlertWindow::InfoIcon);
-    listenWindow->addProgressBarComponent(assistantListenProgress);
-    listenWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-    listenWindow->setAlwaysOnTop(true);
-    listenWindow->centreAroundComponent(this, 520, 210);
+    referenceFileChooser = std::make_unique<juce::FileChooser>("Choose a reference audio file",
+                                                               juce::File(),
+                                                               "*.wav;*.flac");
 
     juce::Component::SafePointer<MainComponent> safeThis(this);
-    listenWindow->enterModalState(true,
-                                  juce::ModalCallbackFunction::create([safeThis](int result)
-                                  {
-                                      if (safeThis == nullptr)
-                                          return;
+    referenceFileChooser->launchAsync(juce::FileBrowserComponent::openMode
+                                      | juce::FileBrowserComponent::canSelectFiles,
+                                      [safeThis] (const juce::FileChooser& chooser)
+                                      {
+                                          if (safeThis == nullptr)
+                                              return;
 
-                                      if (safeThis->assistantUiState == AssistantUiState::listening && result == 0)
-                                          safeThis->cancelAssistantListening();
-                                  }),
-                                  true);
-    assistantListenWindow = listenWindow;
+                                          const juce::File selectedFile = chooser.getResult();
+                                          safeThis->referenceFileChooser.reset();
+
+                                          if (selectedFile == juce::File())
+                                              return;
+
+                                          juce::MouseCursor::showWaitCursor();
+                                          juce::String errorMessage;
+                                          if (!safeThis->audioProcessor.loadReferenceAudioFile(selectedFile, errorMessage))
+                                          {
+                                              juce::MouseCursor::hideWaitCursor();
+                                              juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                                                     "Reference Match",
+                                                                                     errorMessage);
+                                              return;
+                                          }
+                                          juce::MouseCursor::hideWaitCursor();
+
+                                         safeThis->beginListeningSession(AssistantUiState::listeningReference,
+                                                                         "LISTENING...",
+                                                                         "Reference Listening",
+                                                                         "Reference ready.\n"
+                                                                         "Listening to your mix now.\n"
+                                                                         "Play the loudest section.");
+                                      });
 }
 
 void MainComponent::cancelAssistantListening()
 {
+    const auto wasReferenceWorkflow = (assistantUiState == AssistantUiState::listeningReference);
     assistantUiState = AssistantUiState::idle;
     assistantListenProgress = 0.0;
     assistantListenStartMs = 0.0;
-
+    setAssistantButtonsEnabled(true);
     if (masterAssistButton != nullptr)
-    {
         masterAssistButton->setButtonText("MASTER ASSIST");
-        masterAssistButton->setEnabled(true);
-    }
+    if (referenceButton != nullptr)
+        referenceButton->setButtonText("REFERENCE");
     pendingAssistantParameters.reset();
+    pendingAssistantWindowTitle.clear();
+    if (wasReferenceWorkflow)
+        audioProcessor.clearLoadedReferenceAudio();
 
     closeAssistantListenWindow();
 }
 
 void MainComponent::completeAssistantListening()
 {
-    if (assistantUiState != AssistantUiState::listening)
+    if (assistantUiState == AssistantUiState::idle)
         return;
 
+    const auto completedState = assistantUiState;
     assistantUiState = AssistantUiState::idle;
-
+    setAssistantButtonsEnabled(true);
     if (masterAssistButton != nullptr)
-    {
         masterAssistButton->setButtonText("MASTER ASSIST");
-        masterAssistButton->setEnabled(true);
-    }
+    if (referenceButton != nullptr)
+        referenceButton->setButtonText("REFERENCE");
 
     closeAssistantListenWindow();
 
     if (!audioProcessor.hasAssistantCapturedSignal())
     {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                               "Master Assistant",
+                                               completedState == AssistantUiState::listeningReference
+                                                   ? "Reference Match"
+                                                   : "Master Assistant",
                                                "No audio signal was detected.\n"
                                                "Play the loudest section of your mix and try again.");
+        if (completedState == AssistantUiState::listeningReference)
+            audioProcessor.clearLoadedReferenceAudio();
         return;
     }
 
     oxygen::MasteringParameters suggestion;
-    if (!audioProcessor.createMasterAssistantSuggestion(suggestion))
+    juce::String errorMessage;
+    const bool suggestionCreated = (completedState == AssistantUiState::listeningReference)
+        ? audioProcessor.createReferenceMatchSuggestion(suggestion, errorMessage)
+        : audioProcessor.createMasterAssistantSuggestion(suggestion);
+
+    if (!suggestionCreated)
     {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                               "Master Assistant",
-                                               "Unable to build the mastering suggestion.\n"
-                                               "Try listening again with a stronger signal.");
+                                               completedState == AssistantUiState::listeningReference
+                                                   ? "Reference Match"
+                                                   : "Master Assistant",
+                                               completedState == AssistantUiState::listeningReference
+                                                   ? errorMessage
+                                                   : "Unable to build the mastering suggestion.\n"
+                                                     "Try listening again with a stronger signal.");
+        if (completedState == AssistantUiState::listeningReference)
+            audioProcessor.clearLoadedReferenceAudio();
         return;
     }
 
     pendingAssistantParameters = suggestion;
+    pendingAssistantWindowTitle = (completedState == AssistantUiState::listeningReference)
+        ? "Reference Match"
+        : "Master Assistant";
 
-    showAssistantApplyConfirmation();
+    showAssistantApplyConfirmation(pendingAssistantWindowTitle,
+                                   completedState == AssistantUiState::listeningReference
+                                       ? "Reference analysis complete.\n"
+                                         "Apply the matched settings from \""
+                                           + shortenForDialog(audioProcessor.getLoadedReferenceName(), 28)
+                                           + "\"?"
+                                       : "Analysis complete.\n"
+                                         "Apply the recommended mastering settings to the modules?");
 }
 
-void MainComponent::showAssistantApplyConfirmation()
+void MainComponent::showAssistantApplyConfirmation(const juce::String& windowTitle,
+                                                   const juce::String& messageText)
 {
     if (!pendingAssistantParameters.has_value())
         return;
 
-    auto* confirmationWindow = new juce::AlertWindow("Master Assistant",
-                                                     "Analysis complete.\n"
-                                                     "Apply the recommended mastering settings to the modules?",
+    auto* confirmationWindow = new juce::AlertWindow(windowTitle,
+                                                     {},
                                                      juce::AlertWindow::QuestionIcon);
+    confirmationWindow->addCustomComponent(createDialogMessageComponent(messageText).release());
     confirmationWindow->addButton("Apply", 1);
     confirmationWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
     confirmationWindow->setAlwaysOnTop(true);
-    confirmationWindow->centreAroundComponent(this, 400, 190);
+    confirmationWindow->centreAroundComponent(this, 450, 220);
 
     juce::Component::SafePointer<MainComponent> safeThis(this);
     confirmationWindow->enterModalState(true,
@@ -318,15 +450,71 @@ void MainComponent::showAssistantApplyConfirmation()
                                                 if (!safeThis->audioProcessor.applyMasterAssistantSuggestion(*safeThis->pendingAssistantParameters))
                                                 {
                                                     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                                                           "Master Assistant",
+                                                                                           safeThis->pendingAssistantWindowTitle,
                                                                                            "Unable to apply settings.\n"
                                                                                            "No valid audio profile is available.");
                                                 }
                                             }
 
+                                            safeThis->audioProcessor.clearLoadedReferenceAudio();
                                             safeThis->pendingAssistantParameters.reset();
+                                            safeThis->pendingAssistantWindowTitle.clear();
                                         }),
                                         true);
+}
+
+void MainComponent::setAssistantButtonsEnabled(bool shouldEnable)
+{
+    if (masterAssistButton != nullptr)
+        masterAssistButton->setEnabled(shouldEnable);
+
+    if (referenceButton != nullptr)
+        referenceButton->setEnabled(shouldEnable);
+}
+
+void MainComponent::beginListeningSession(AssistantUiState state,
+                                          const juce::String& activeButtonText,
+                                          const juce::String& windowTitle,
+                                          const juce::String& windowMessage)
+{
+    closeAssistantListenWindow();
+
+    audioProcessor.resetAssistantAnalysisCapture();
+    assistantUiState = state;
+    assistantListenProgress = 0.0;
+    assistantListenStartMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (masterAssistButton != nullptr)
+        masterAssistButton->setButtonText(state == AssistantUiState::listeningMasterAssistant
+                                              ? activeButtonText
+                                              : "MASTER ASSIST");
+    if (referenceButton != nullptr)
+        referenceButton->setButtonText(state == AssistantUiState::listeningReference
+                                           ? activeButtonText
+                                           : "REFERENCE");
+    setAssistantButtonsEnabled(false);
+
+    auto* listenWindow = new juce::AlertWindow(windowTitle,
+                                               {},
+                                               juce::AlertWindow::NoIcon);
+    listenWindow->addCustomComponent(createDialogMessageComponent(windowMessage).release());
+    listenWindow->addProgressBarComponent(assistantListenProgress);
+    listenWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    listenWindow->setAlwaysOnTop(true);
+    listenWindow->centreAroundComponent(this, 460, 245);
+
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+    listenWindow->enterModalState(true,
+                                  juce::ModalCallbackFunction::create([safeThis](int result)
+                                  {
+                                      if (safeThis == nullptr)
+                                          return;
+
+                                      if (safeThis->assistantUiState != AssistantUiState::idle && result == 0)
+                                          safeThis->cancelAssistantListening();
+                                  }),
+                                  true);
+    assistantListenWindow = listenWindow;
 }
 
 void MainComponent::closeAssistantListenWindow()

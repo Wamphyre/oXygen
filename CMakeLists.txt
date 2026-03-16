@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(oXygen VERSION 1.0.0)
+project(oXygen VERSION 1.0.1)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -70,6 +70,12 @@ juce_add_plugin(oXygen
 
 )
 
+juce_add_binary_data(oXygenAssets
+    SOURCES
+        assets/oxygen_icon.svg
+        assets/reference_icon.svg
+)
+
 # Add source files
 target_sources(oXygen
     PRIVATE
@@ -86,8 +92,12 @@ target_sources(oXygen
         Source/Modules/GainModule.h
         Source/Modules/EqualizerModule.cpp
         Source/Modules/EqualizerModule.h
+        Source/Modules/DynamicEqModule.cpp
+        Source/Modules/DynamicEqModule.h
         Source/Modules/MultibandCompressorModule.cpp
         Source/Modules/MultibandCompressorModule.h
+        Source/GUI/DynamicEqEditor.cpp
+        Source/GUI/DynamicEqEditor.h
         Source/GUI/MultibandCompressorEditor.cpp
         Source/GUI/MultibandCompressorEditor.h
         Source/Modules/MaximizerModule.cpp
@@ -118,7 +128,9 @@ endif()
 # Link against JUCE modules
 target_link_libraries(oXygen
     PRIVATE
+        oXygenAssets
         juce::juce_audio_utils
+        juce::juce_audio_formats
         juce::juce_dsp
         juce::juce_gui_basics
     PUBLIC

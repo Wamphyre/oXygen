@@ -14,6 +14,7 @@ namespace oxygen
     namespace
     {
         constexpr int eqBandCount = MasteringParameters::eqBandCount;
+        constexpr int dynamicEqBandCount = MasteringParameters::dynamicEqBandCount;
         constexpr float assistantEqHardLimitDb = 7.5f;
         constexpr std::array<float, eqBandCount> eqBandCenters = {
             30.0f, 40.0f, 60.0f, 100.0f,
@@ -21,6 +22,7 @@ namespace oxygen
             1500.0f, 2500.0f, 4000.0f, 6000.0f,
             10000.0f, 15000.0f, 20000.0f
         };
+        constexpr std::array<int, dynamicEqBandCount> dynamicEqMacroBands { 0, 1, 2, 3 };
 
         struct AnalysisFeatures
         {
@@ -31,10 +33,12 @@ namespace oxygen
             float integratedLufs = -100.0f;
             float shortTermLufs = -100.0f;
             float crestDb = 0.0f;
+            float transientMotionDb = 0.0f;
             float lowVsMidDb = 0.0f;
             float highVsMidDb = 0.0f;
             float stereoCorrelation = 1.0f;
             float sideRatio = 0.0f;
+            std::array<float, eqBandCount> eqBandProfileDb {};
             std::array<float, eqBandCount> eqDeviationDb {};
             std::array<float, eqBandCount> eqExcessPersistence {};
             std::array<float, eqBandCount> eqDeficitPersistence {};
@@ -43,7 +47,24 @@ namespace oxygen
             std::array<float, 4> bandCrestDb {};
             std::array<float, 4> bandCorrelation {};
             std::array<float, 4> bandSideRatio {};
+            std::array<float, 4> bandTransientMotionDb {};
             bool valid = false;
+        };
+
+        struct ReferenceMatchProfile
+        {
+            float tonalConfidence = 1.0f;
+            float glueConfidence = 1.0f;
+            float transientConfidence = 1.0f;
+            float widthConfidence = 1.0f;
+            float loudnessConfidence = 1.0f;
+            float overallConfidence = 1.0f;
+            float toneWeight = 1.0f;
+            float glueWeight = 1.0f;
+            float transientWeight = 1.0f;
+            float widthWeight = 1.0f;
+            float loudnessWeight = 1.0f;
+            float lowEndSafety = 1.0f;
         };
 
         float gainToDbSafe(float gain)
@@ -243,9 +264,42 @@ namespace oxygen
             return profile;
         }
 
+        std::array<float, eqBandCount> smoothEqCurve(const std::array<float, eqBandCount>& curve)
+        {
+            auto smoothed = curve;
+
+            for (int pass = 0; pass < 2; ++pass)
+            {
+                const auto previous = smoothed;
+                for (int band = 0; band < eqBandCount; ++band)
+                {
+                    if (band == 0)
+                        smoothed[(size_t) band] = (0.78f * previous[(size_t) band]) + (0.22f * previous[1]);
+                    else if (band == eqBandCount - 1)
+                        smoothed[(size_t) band] = (0.78f * previous[(size_t) band]) + (0.22f * previous[(size_t) band - 1]);
+                    else
+                        smoothed[(size_t) band] = (0.18f * previous[(size_t) band - 1])
+                                                + (0.64f * previous[(size_t) band])
+                                                + (0.18f * previous[(size_t) band + 1]);
+                }
+            }
+
+            return smoothed;
+        }
+
         float clampEqGain(float gainDb)
         {
             return juce::jlimit(-assistantEqHardLimitDb, assistantEqHardLimitDb, gainDb);
+        }
+
+        float clampDynamicEqThreshold(float thresholdDb)
+        {
+            return juce::jlimit(-48.0f, -6.0f, thresholdDb);
+        }
+
+        float clampDynamicEqRange(float rangeDb)
+        {
+            return juce::jlimit(0.0f, 12.0f, rangeDb);
         }
 
         void addEqGain(MasteringParameters& params, int bandIndex, float deltaDb)
@@ -255,6 +309,21 @@ namespace oxygen
 
             auto& gain = params.eqBandGains[(size_t) bandIndex];
             gain = clampEqGain(gain + deltaDb);
+        }
+
+        void setDynamicEqBand(MasteringParameters& params, int bandIndex, float thresholdDb, float rangeDb)
+        {
+            if (bandIndex < 0 || bandIndex >= dynamicEqBandCount)
+                return;
+
+            params.dynamicEqThresholds[(size_t) bandIndex] = clampDynamicEqThreshold(thresholdDb);
+            params.dynamicEqRanges[(size_t) bandIndex] = clampDynamicEqRange(rangeDb);
+        }
+
+        float deriveDynamicEqThreshold(float bandRmsDb, float rangeDb, float transientMotionDb, float offsetDb)
+        {
+            const float transientOffsetDb = juce::jlimit(-1.2f, 1.6f, 1.0f - (0.32f * transientMotionDb));
+            return clampDynamicEqThreshold(bandRmsDb + 5.6f - (0.62f * rangeDb) + transientOffsetDb + offsetDb);
         }
 
         float computeBandControl(float crestDb, float extraBias)
@@ -267,6 +336,141 @@ namespace oxygen
             return value + ((target - value) * amount);
         }
 
+        int mapEqBandToMacroBand(int band)
+        {
+            if (band <= 3)
+                return 0;
+
+            if (band <= 7)
+                return 1;
+
+            if (band <= 11)
+                return 2;
+
+            return 3;
+        }
+
+        float getProgramLoudnessDb(const AnalysisFeatures& features)
+        {
+            return (features.integratedLufs > -99.0f)
+                 ? features.integratedLufs
+                 : features.gatedRmsDb;
+        }
+
+        float computeWeightedPositiveEqBoostDb(const std::array<float, eqBandCount>& eqBandGains)
+        {
+            float weightedBoost = 0.0f;
+            float weightTotal = 0.0f;
+
+            for (int band = 0; band < eqBandCount; ++band)
+            {
+                const float bandWeight = (band >= 4 && band <= 11) ? 1.0f
+                                       : (band >= 2 && band <= 12) ? 0.86f
+                                       : 0.72f;
+                weightedBoost += juce::jmax(0.0f, eqBandGains[(size_t) band]) * bandWeight;
+                weightTotal += bandWeight;
+            }
+
+            return (weightTotal > 0.0f) ? (weightedBoost / weightTotal) : 0.0f;
+        }
+
+        float computeCompressionDensityScore(const MasteringParameters& params)
+        {
+            const float lowDensity = juce::jmax(0.0f, params.lowRatio - 1.55f)
+                                   + juce::jmax(0.0f, -params.lowThresh - 16.0f) * 0.12f;
+            const float lowMidDensity = juce::jmax(0.0f, params.lowMidRatio - 1.45f)
+                                      + juce::jmax(0.0f, -params.lowMidThresh - 15.0f) * 0.12f;
+            const float highMidDensity = juce::jmax(0.0f, params.highMidRatio - 1.35f)
+                                       + juce::jmax(0.0f, -params.highMidThresh - 14.0f) * 0.10f;
+            const float highDensity = juce::jmax(0.0f, params.highRatio - 1.30f)
+                                    + juce::jmax(0.0f, -params.highThresh - 13.0f) * 0.10f;
+
+            return (lowDensity * 0.30f)
+                 + (lowMidDensity * 0.28f)
+                 + (highMidDensity * 0.24f)
+                 + (highDensity * 0.18f);
+        }
+
+        float estimateReferenceSaturationRisk(const MasteringParameters& params,
+                                              const AnalysisFeatures& sourceFeatures,
+                                              float sourceProgramLoudnessDb,
+                                              float targetProgramLoudnessDb)
+        {
+            const float outputTrimDb = juce::Decibels::gainToDecibels(juce::jmax(params.outputGain, 1.0e-4f));
+            const float positiveEqBoostDb = computeWeightedPositiveEqBoostDb(params.eqBandGains);
+            const float compressionDensity = computeCompressionDensityScore(params);
+            const float widthLift = (juce::jmax(0.0f, params.lowMidWidth - 1.04f) * 0.24f)
+                                  + (juce::jmax(0.0f, params.highMidWidth - 1.16f) * 0.56f)
+                                  + (juce::jmax(0.0f, params.highWidth - 1.28f) * 0.72f);
+            const float limiterDriveDb = juce::jmax(0.0f, -params.maximizerThreshold);
+
+            const float predictedExcitationDb = (positiveEqBoostDb * 0.88f)
+                                              + (juce::jmax(0.0f, outputTrimDb) * 1.05f)
+                                              + (compressionDensity * 0.60f)
+                                              + widthLift
+                                              + (juce::jmax(0.0f, limiterDriveDb - 6.5f) * 0.44f);
+            const float predictedPreLimiterPeakDb = sourceFeatures.truePeakDb + (predictedExcitationDb * 0.54f);
+            const float limiterStressDb = juce::jmax(0.0f, predictedPreLimiterPeakDb - (params.maximizerCeiling + 0.35f))
+                                        + (juce::jmax(0.0f, limiterDriveDb - 8.8f) * 0.62f);
+
+            const float predictedProgramLoudnessDb = sourceProgramLoudnessDb
+                                                   + (juce::jmax(0.0f, targetProgramLoudnessDb - sourceProgramLoudnessDb) * 0.94f)
+                                                   + (positiveEqBoostDb * 0.16f)
+                                                   + (compressionDensity * 0.24f);
+            const float loudnessOvershootDb = juce::jmax(0.0f, predictedProgramLoudnessDb - (targetProgramLoudnessDb + 0.55f));
+            const float boostStressDb = juce::jmax(0.0f, positiveEqBoostDb - 4.8f) * 0.46f;
+
+            return limiterStressDb + (loudnessOvershootDb * 0.82f) + boostStressDb;
+        }
+
+        void softenReferenceParametersForSafety(MasteringParameters& params, float saturationRisk)
+        {
+            const float softenAmount = juce::jlimit(0.0f, 0.46f, saturationRisk / 6.5f);
+            if (softenAmount <= 0.0f)
+                return;
+
+            for (auto& gainDb : params.eqBandGains)
+            {
+                if (gainDb > 0.0f)
+                    gainDb *= (1.0f - (0.64f * softenAmount));
+                else
+                    gainDb *= (1.0f - (0.20f * softenAmount));
+
+                gainDb = clampEqGain(gainDb);
+            }
+
+            params.eqBandGains = smoothEqCurve(params.eqBandGains);
+            for (auto& gainDb : params.eqBandGains)
+                gainDb = clampEqGain(gainDb);
+
+            params.lowThresh += 2.2f * softenAmount;
+            params.lowMidThresh += 2.0f * softenAmount;
+            params.highMidThresh += 1.8f * softenAmount;
+            params.highThresh += 1.6f * softenAmount;
+
+            params.lowRatio = pullTowards(params.lowRatio, 1.10f, 0.42f * softenAmount);
+            params.lowMidRatio = pullTowards(params.lowMidRatio, 1.08f, 0.40f * softenAmount);
+            params.highMidRatio = pullTowards(params.highMidRatio, 1.06f, 0.38f * softenAmount);
+            params.highRatio = pullTowards(params.highRatio, 1.04f, 0.36f * softenAmount);
+
+            params.lowWidth = juce::jmin(params.lowWidth, 0.18f - (0.05f * softenAmount));
+            params.lowMidWidth = pullTowards(params.lowMidWidth, 1.04f, 0.30f * softenAmount);
+            params.highMidWidth = pullTowards(params.highMidWidth, 1.10f, 0.36f * softenAmount);
+            params.highWidth = pullTowards(params.highWidth, 1.16f, 0.40f * softenAmount);
+
+            float outputTrimDb = juce::Decibels::gainToDecibels(juce::jmax(params.outputGain, 1.0e-4f));
+            outputTrimDb -= 1.6f * softenAmount;
+            params.outputGain = juce::Decibels::decibelsToGain(outputTrimDb);
+
+            params.maximizerThreshold = juce::jmin(-0.6f, params.maximizerThreshold + (2.2f * softenAmount));
+            params.maximizerCeiling = juce::jmin(params.maximizerCeiling, -0.55f - (0.18f * softenAmount));
+            params.maximizerRelease = juce::jmin(180.0f, params.maximizerRelease + (18.0f * softenAmount));
+
+            juce::Logger::writeToLog("Reference safety softening applied: risk="
+                                     + juce::String(saturationRisk, 2)
+                                     + ", soften=" + juce::String(softenAmount, 2));
+        }
+
         AnalysisFeatures extractFeatures(const juce::AudioBuffer<float>& recentAudio, double sampleRate)
         {
             AnalysisFeatures features;
@@ -275,6 +479,7 @@ namespace oxygen
             features.bandCrestDb.fill(0.0f);
             features.bandCorrelation.fill(1.0f);
             features.bandSideRatio.fill(0.0f);
+            features.bandTransientMotionDb.fill(0.0f);
 
             const int numChannels = juce::jmin(recentAudio.getNumChannels(), 2);
             const int numSamples = recentAudio.getNumSamples();
@@ -332,6 +537,11 @@ namespace oxygen
             std::array<double, eqBandCount> eqBandEnergy {};
             std::vector<std::array<float, eqBandCount>> frameBandProfiles;
             std::vector<float> frameWeights;
+            std::array<double, 4> bandTransientMotionSum {};
+            std::array<double, 4> bandTransientMotionWeightSum {};
+            std::array<float, 4> previousMacroBandDb {};
+            float previousMotionWeight = 0.0f;
+            bool hasPreviousMotionFrame = false;
             double lowEnergy = 0.0;
             double midEnergy = 0.0;
             double highEnergy = 0.0;
@@ -346,6 +556,7 @@ namespace oxygen
             {
                 std::array<float, fftSize * 2> fftData {};
                 std::array<double, eqBandCount> frameBandEnergy {};
+                std::array<double, 4> frameMacroBandEnergy {};
                 double frameMeanSquare = 0.0;
 
                 for (int i = 0; i < fftSize; ++i)
@@ -375,10 +586,26 @@ namespace oxygen
                     const double energy = (double) fftData[(size_t) bin] * fftData[(size_t) bin];
 
                     if (freq < 120.0f)
+                    {
                         lowEnergy += energy * frameWeight;
-                    else if (freq < 4000.0f)
-                        midEnergy += energy * frameWeight;
+                        frameMacroBandEnergy[0] += energy;
+                    }
+                    else if (freq < 1400.0f)
+                    {
+                        frameMacroBandEnergy[1] += energy;
+                    }
+                    else if (freq < 6000.0f)
+                    {
+                        frameMacroBandEnergy[2] += energy;
+                    }
                     else
+                    {
+                        frameMacroBandEnergy[3] += energy;
+                    }
+
+                    if (freq >= 120.0f && freq < 4000.0f)
+                        midEnergy += energy * frameWeight;
+                    else if (freq >= 4000.0f)
                         highEnergy += energy * frameWeight;
 
                     while (bandIndex + 1 < (size_t) eqBandCount && freq >= eqBandEdges[bandIndex + 1])
@@ -397,6 +624,26 @@ namespace oxygen
                 for (int band = 0; band < eqBandCount; ++band)
                     frameBandDb[(size_t) band] = meanSquareToDbSafe(frameBandEnergy[(size_t) band]);
 
+                std::array<float, 4> frameMacroBandDb {};
+                for (int band = 0; band < 4; ++band)
+                    frameMacroBandDb[(size_t) band] = meanSquareToDbSafe(frameMacroBandEnergy[(size_t) band]);
+
+                if (hasPreviousMotionFrame)
+                {
+                    const float motionWeight = std::sqrt(juce::jmax(0.0f, frameWeight * previousMotionWeight));
+                    for (int band = 0; band < 4; ++band)
+                    {
+                        const float motionDb = juce::jmax(0.0f,
+                            frameMacroBandDb[(size_t) band] - previousMacroBandDb[(size_t) band]);
+                        bandTransientMotionSum[(size_t) band] += (double) motionDb * motionWeight;
+                        bandTransientMotionWeightSum[(size_t) band] += motionWeight;
+                    }
+                }
+
+                previousMacroBandDb = frameMacroBandDb;
+                previousMotionWeight = frameWeight;
+                hasPreviousMotionFrame = true;
+
                 frameBandProfiles.push_back(frameBandDb);
                 frameWeights.push_back(frameWeight);
             }
@@ -413,6 +660,27 @@ namespace oxygen
                 bandDb[(size_t) band] = meanSquareToDbSafe(eqBandEnergy[(size_t) band] / normalizationWeight);
 
             const auto smoothedBandDb = smoothBandProfile(bandDb);
+            features.eqBandProfileDb = smoothedBandDb;
+
+            float transientMotionWeightedSum = 0.0f;
+            float transientMotionWeightTotal = 0.0f;
+            for (int band = 0; band < 4; ++band)
+            {
+                const float motionDb = (bandTransientMotionWeightSum[(size_t) band] > 0.0)
+                    ? (float) (bandTransientMotionSum[(size_t) band] / bandTransientMotionWeightSum[(size_t) band])
+                    : 0.0f;
+                features.bandTransientMotionDb[(size_t) band] = juce::jlimit(0.0f, 6.0f, motionDb);
+
+                const float bandWeight = (band == 0) ? 0.18f
+                                       : (band == 1) ? 0.24f
+                                       : (band == 2) ? 0.32f
+                                                     : 0.26f;
+                transientMotionWeightedSum += features.bandTransientMotionDb[(size_t) band] * bandWeight;
+                transientMotionWeightTotal += bandWeight;
+            }
+
+            if (transientMotionWeightTotal > 0.0f)
+                features.transientMotionDb = transientMotionWeightedSum / transientMotionWeightTotal;
 
             for (int band = 0; band < eqBandCount; ++band)
                 features.eqDeviationDb[(size_t) band] = bandDb[(size_t) band] - smoothedBandDb[(size_t) band];
@@ -563,6 +831,181 @@ namespace oxygen
         float normalizedDifference(float value, float target, float scale)
         {
             return std::abs(value - target) / juce::jmax(scale, 1.0e-4f);
+        }
+
+        float confidenceFromPenalty(float penalty, float scale)
+        {
+            return juce::jlimit(0.0f, 1.0f, 1.0f - (penalty / juce::jmax(scale, 1.0e-4f)));
+        }
+
+        std::array<float, eqBandCount> normalizeEqProfile(const std::array<float, eqBandCount>& profile)
+        {
+            std::array<float, eqBandCount> normalized = profile;
+            float weightedSum = 0.0f;
+            float weightTotal = 0.0f;
+
+            for (int band = 0; band < eqBandCount; ++band)
+            {
+                const float weight = (band <= 1 || band >= eqBandCount - 2) ? 0.72f
+                                   : (band >= 4 && band <= 11) ? 1.0f
+                                   : 0.84f;
+                weightedSum += profile[(size_t) band] * weight;
+                weightTotal += weight;
+            }
+
+            const float average = (weightTotal > 0.0f) ? (weightedSum / weightTotal) : 0.0f;
+            for (auto& value : normalized)
+                value -= average;
+
+            return smoothBandProfile(normalized);
+        }
+
+        float computeEqProfileDistance(const std::array<float, eqBandCount>& a,
+                                       const std::array<float, eqBandCount>& b)
+        {
+            float weightedDistance = 0.0f;
+            float weightTotal = 0.0f;
+
+            for (int band = 0; band < eqBandCount; ++band)
+            {
+                const float weight = (band <= 1 || band >= eqBandCount - 2) ? 0.68f
+                                   : (band >= 3 && band <= 11) ? 1.0f
+                                   : 0.82f;
+                weightedDistance += std::abs(a[(size_t) band] - b[(size_t) band]) * weight;
+                weightTotal += weight;
+            }
+
+            return (weightTotal > 0.0f) ? (weightedDistance / weightTotal) : 0.0f;
+        }
+
+        template <size_t Size>
+        float computeAverageBandPenalty(const std::array<float, Size>& a,
+                                        const std::array<float, Size>& b,
+                                        float scale)
+        {
+            float penalty = 0.0f;
+            for (size_t index = 0; index < Size; ++index)
+                penalty += normalizedDifference(a[index], b[index], scale);
+
+            return penalty / (float) Size;
+        }
+
+        ReferenceMatchProfile evaluateReferenceMatch(const AnalysisFeatures& sourceFeatures,
+                                                     const AnalysisFeatures& referenceFeatures)
+        {
+            ReferenceMatchProfile profile;
+
+            const auto sourceNormalizedEq = normalizeEqProfile(sourceFeatures.eqBandProfileDb);
+            const auto referenceNormalizedEq = normalizeEqProfile(referenceFeatures.eqBandProfileDb);
+            const float programLoudnessGap = std::abs(getProgramLoudnessDb(sourceFeatures)
+                                                    - getProgramLoudnessDb(referenceFeatures));
+            const float eqDistance = computeEqProfileDistance(sourceNormalizedEq, referenceNormalizedEq);
+            const float bandCrestPenalty = computeAverageBandPenalty(sourceFeatures.bandCrestDb,
+                                                                     referenceFeatures.bandCrestDb,
+                                                                     4.8f);
+            const float bandWidthPenalty = computeAverageBandPenalty(sourceFeatures.bandSideRatio,
+                                                                     referenceFeatures.bandSideRatio,
+                                                                     0.24f);
+            const float transientPenalty = (normalizedDifference(sourceFeatures.transientMotionDb,
+                                                                 referenceFeatures.transientMotionDb,
+                                                                 0.95f) * 0.34f)
+                                         + (computeAverageBandPenalty(sourceFeatures.bandTransientMotionDb,
+                                                                      referenceFeatures.bandTransientMotionDb,
+                                                                      1.10f) * 0.66f);
+
+            const float tonalPenalty = (normalizedDifference(sourceFeatures.lowVsMidDb,
+                                                             referenceFeatures.lowVsMidDb,
+                                                             3.6f) * 0.22f)
+                                     + (normalizedDifference(sourceFeatures.highVsMidDb,
+                                                             referenceFeatures.highVsMidDb,
+                                                             3.0f) * 0.24f)
+                                     + ((eqDistance / 4.2f) * 0.46f)
+                                     + (transientPenalty * 0.08f);
+
+            const float gluePenalty = (normalizedDifference(sourceFeatures.crestDb,
+                                                            referenceFeatures.crestDb,
+                                                            5.4f) * 0.44f)
+                                     + (bandCrestPenalty * 0.28f)
+                                     + (normalizedDifference(sourceFeatures.shortTermLufs,
+                                                             referenceFeatures.shortTermLufs,
+                                                             4.8f) * 0.16f)
+                                     + (transientPenalty * 0.12f);
+
+            const float widthPenalty = (normalizedDifference(sourceFeatures.sideRatio,
+                                                             referenceFeatures.sideRatio,
+                                                             0.22f) * 0.28f)
+                                      + (normalizedDifference(sourceFeatures.stereoCorrelation,
+                                                              referenceFeatures.stereoCorrelation,
+                                                              0.30f) * 0.22f)
+                                      + (bandWidthPenalty * 0.34f)
+                                      + (normalizedDifference(sourceFeatures.bandSideRatio[0],
+                                                              referenceFeatures.bandSideRatio[0],
+                                                              0.10f) * 0.16f)
+                                      + (normalizedDifference(sourceFeatures.bandTransientMotionDb[3],
+                                                              referenceFeatures.bandTransientMotionDb[3],
+                                                              1.15f) * 0.08f);
+
+            const float loudnessPenalty = (normalizedDifference(getProgramLoudnessDb(sourceFeatures),
+                                                                getProgramLoudnessDb(referenceFeatures),
+                                                                5.0f) * 0.64f)
+                                         + (normalizedDifference(sourceFeatures.truePeakDb,
+                                                                 referenceFeatures.truePeakDb,
+                                                                 1.20f) * 0.36f);
+
+            const float lowEndMismatch = (normalizedDifference(sourceFeatures.lowVsMidDb,
+                                                               referenceFeatures.lowVsMidDb,
+                                                               4.2f) * 0.62f)
+                                       + (normalizedDifference(sourceFeatures.bandSideRatio[0],
+                                                               referenceFeatures.bandSideRatio[0],
+                                                               0.09f) * 0.38f);
+
+            profile.tonalConfidence = confidenceFromPenalty(tonalPenalty, 1.35f);
+            profile.glueConfidence = confidenceFromPenalty(gluePenalty, 1.35f);
+            profile.transientConfidence = confidenceFromPenalty(transientPenalty, 1.32f);
+            profile.widthConfidence = confidenceFromPenalty(widthPenalty, 1.30f);
+            profile.loudnessConfidence = confidenceFromPenalty(loudnessPenalty, 1.25f);
+            profile.lowEndSafety = juce::jlimit(0.22f, 1.0f, confidenceFromPenalty(lowEndMismatch, 1.18f));
+
+            profile.overallConfidence = juce::jlimit(0.0f, 1.0f,
+                (profile.tonalConfidence * 0.36f)
+              + (profile.glueConfidence * 0.24f)
+              + (profile.transientConfidence * 0.14f)
+              + (profile.widthConfidence * 0.12f)
+              + (profile.loudnessConfidence * 0.14f));
+
+            const float overallBlend = juce::jlimit(0.60f, 1.14f, 0.64f + (0.58f * profile.overallConfidence));
+            profile.toneWeight = juce::jlimit(0.58f, 1.24f,
+                (0.60f + (0.88f * ((profile.tonalConfidence * 0.68f)
+                                 + (profile.transientConfidence * 0.14f)
+                                 + (profile.overallConfidence * 0.18f))))
+                    * overallBlend);
+            profile.glueWeight = juce::jlimit(0.34f, 1.16f,
+                (0.40f + (0.84f * ((profile.glueConfidence * 0.58f)
+                                 + (profile.transientConfidence * 0.24f)
+                                 + (profile.overallConfidence * 0.18f))))
+                    * overallBlend);
+            profile.transientWeight = juce::jlimit(0.42f, 1.24f,
+                (0.48f + (0.86f * ((profile.transientConfidence * 0.72f)
+                                 + (profile.glueConfidence * 0.12f)
+                                 + (profile.overallConfidence * 0.16f))))
+                    * juce::jlimit(0.68f, 1.12f, overallBlend * (0.86f + (0.18f * profile.transientConfidence))));
+            profile.widthWeight = juce::jlimit(0.22f, 1.06f,
+                ((0.28f + (0.78f * ((profile.widthConfidence * 0.66f)
+                                  + (profile.transientConfidence * 0.10f)
+                                  + (profile.overallConfidence * 0.24f))))
+                    * overallBlend * juce::jlimit(0.72f, 1.0f, 0.72f + (0.28f * profile.lowEndSafety))));
+            profile.loudnessWeight = juce::jlimit(0.34f, 1.18f,
+                (0.40f + (0.82f * ((profile.loudnessConfidence * 0.54f)
+                                 + (profile.overallConfidence * 0.32f)
+                                 + (profile.transientConfidence * 0.14f))))
+                    * juce::jlimit(0.66f, 1.10f,
+                                   (0.72f + (0.44f * profile.overallConfidence))
+                                     * (0.82f + (0.18f * profile.transientConfidence))));
+
+            if (programLoudnessGap > 5.5f && profile.overallConfidence < 0.46f)
+                profile.loudnessWeight = juce::jmin(profile.loudnessWeight, 0.86f);
+
+            return profile;
         }
 
         float scoreGenrePattern(const AnalysisFeatures& features, const GenrePattern& pattern)
@@ -1280,6 +1723,45 @@ namespace oxygen
                 gainDb = 0.0f;
         }
 
+        const float dynamicEqScale = juce::jlimit(0.68f, 1.36f,
+                                                  impactStrength
+                                                    * (hotProgram ? 0.90f : 1.0f)
+                                                    * (overCompressedProgram ? 0.84f : 1.0f));
+        const float lowResonancePersistence = maxBandRange(features.eqExcessPersistence, 2, 4);
+        const float bodyResonancePersistence = maxBandRange(features.eqExcessPersistence, 5, 7);
+        const float presenceResonancePersistence = maxBandRange(features.eqExcessPersistence, 9, 10);
+        const float airResonancePersistence = maxBandRange(features.eqExcessPersistence, 11, 13);
+
+        const float lowDynamicRange = juce::jlimit(0.0f, 7.0f,
+            ((0.55f * lowOverhang) + (0.42f * mudEvidence) + (2.2f * lowResonancePersistence) - (0.18f * lowPunchOpportunity))
+                * dynamicEqScale);
+        const float bodyDynamicRange = juce::jlimit(0.0f, 6.4f,
+            ((0.85f * mudEvidence) + (2.6f * bodyResonancePersistence) + (0.18f * lowOverhang))
+                * dynamicEqScale);
+        const float presenceDynamicRange = juce::jlimit(0.0f, 7.8f,
+            ((0.78f * harshEvidence) + (2.9f * presenceResonancePersistence) + (0.22f * topOverhang))
+                * dynamicEqScale);
+        const float airDynamicRange = juce::jlimit(0.0f, 6.0f,
+            ((0.50f * harshEvidence) + (0.42f * topOverhang) + (2.3f * airResonancePersistence) - (0.15f * airOpportunity))
+                * dynamicEqScale);
+
+        setDynamicEqBand(params, 0,
+                         deriveDynamicEqThreshold(features.bandRmsDb[0], lowDynamicRange, features.bandTransientMotionDb[0],
+                                                  hotProgram ? 0.5f : 0.0f),
+                         lowDynamicRange);
+        setDynamicEqBand(params, 1,
+                         deriveDynamicEqThreshold(features.bandRmsDb[1], bodyDynamicRange, features.bandTransientMotionDb[1],
+                                                  hotProgram ? 0.3f : -0.2f),
+                         bodyDynamicRange);
+        setDynamicEqBand(params, 2,
+                         deriveDynamicEqThreshold(features.bandRmsDb[2], presenceDynamicRange, features.bandTransientMotionDb[2],
+                                                  hotProgram ? 0.2f : -0.4f),
+                         presenceDynamicRange);
+        setDynamicEqBand(params, 3,
+                         deriveDynamicEqThreshold(features.bandRmsDb[3], airDynamicRange, features.bandTransientMotionDb[3],
+                                                  -0.4f),
+                         airDynamicRange);
+
         float positiveEqBoostDb = 0.0f;
         for (const float gainDb : params.eqBandGains)
             positiveEqBoostDb += juce::jmax(0.0f, gainDb) * 0.35f;
@@ -1347,6 +1829,360 @@ namespace oxygen
         params.lowMidRelease = juce::jlimit(70.0f, 220.0f, params.lowMidRelease);
         params.highMidRelease = juce::jlimit(60.0f, 180.0f, params.highMidRelease);
         params.highRelease = juce::jlimit(50.0f, 160.0f, params.highRelease);
+        params.maximizerRelease = juce::jlimit(60.0f, 180.0f, params.maximizerRelease);
+
+        return params;
+    }
+
+    MasteringParameters InferenceEngine::matchReference(const juce::AudioBuffer<float>& sourceAudio,
+                                                        double sourceSampleRate,
+                                                        const juce::AudioBuffer<float>& referenceAudio,
+                                                        double referenceSampleRate)
+    {
+        auto params = predict(sourceAudio, sourceSampleRate);
+
+        const auto sourceFeatures = extractFeatures(sourceAudio, sourceSampleRate);
+        const auto referenceFeatures = extractFeatures(referenceAudio, referenceSampleRate);
+        if (!sourceFeatures.valid || !referenceFeatures.valid)
+            return params;
+
+        params.usedAnalysis = true;
+        const auto referenceMatch = evaluateReferenceMatch(sourceFeatures, referenceFeatures);
+        const float assertiveBlend = juce::jlimit(0.98f, 1.36f,
+                                                  1.02f + (referenceMatch.overallConfidence * 0.34f));
+        const float sourceProgramLoudnessDb = getProgramLoudnessDb(sourceFeatures);
+        const float referenceProgramLoudnessDb = getProgramLoudnessDb(referenceFeatures);
+        juce::Logger::writeToLog("Reference match confidence: overall="
+                                 + juce::String(referenceMatch.overallConfidence, 2)
+                                 + ", tone=" + juce::String(referenceMatch.toneWeight, 2)
+                                 + ", glue=" + juce::String(referenceMatch.glueWeight, 2)
+                                 + ", transient=" + juce::String(referenceMatch.transientWeight, 2)
+                                 + ", width=" + juce::String(referenceMatch.widthWeight, 2)
+                                 + ", loudness=" + juce::String(referenceMatch.loudnessWeight, 2));
+
+        const auto sourceNormalizedEq = normalizeEqProfile(sourceFeatures.eqBandProfileDb);
+        const auto referenceNormalizedEq = normalizeEqProfile(referenceFeatures.eqBandProfileDb);
+        std::array<float, eqBandCount> referenceDeltaDb {};
+        for (int band = 0; band < eqBandCount; ++band)
+        {
+            const float normalizedDeltaDb = referenceNormalizedEq[(size_t) band]
+                                          - sourceNormalizedEq[(size_t) band];
+            const float relativeProfileDeltaDb = (referenceFeatures.eqBandProfileDb[(size_t) band] - referenceProgramLoudnessDb)
+                                               - (sourceFeatures.eqBandProfileDb[(size_t) band] - sourceProgramLoudnessDb);
+            referenceDeltaDb[(size_t) band] = juce::jlimit(-7.6f, 7.6f,
+                                                           (normalizedDeltaDb * 0.18f)
+                                                         + (relativeProfileDeltaDb * 0.82f));
+        }
+
+        referenceDeltaDb = smoothEqCurve(referenceDeltaDb);
+
+        for (int band = 0; band < eqBandCount; ++band)
+        {
+            const int macroBand = mapEqBandToMacroBand(band);
+            const float edgeScale = (band == 0 || band == eqBandCount - 1) ? 0.55f
+                                  : (band == 1 || band == eqBandCount - 2) ? 0.72f
+                                  : 1.0f;
+            const float tonalShiftDb = juce::jlimit(-7.2f, 7.2f,
+                                                    referenceDeltaDb[(size_t) band] * 1.02f * edgeScale
+                                                        * referenceMatch.toneWeight * assertiveBlend);
+            const float localShapeShiftDb = juce::jlimit(-2.8f, 2.8f,
+                (referenceFeatures.eqDeviationDb[(size_t) band] - sourceFeatures.eqDeviationDb[(size_t) band])
+                    * 0.38f * edgeScale * referenceMatch.toneWeight * assertiveBlend);
+            const float transientGap = referenceFeatures.bandTransientMotionDb[(size_t) macroBand]
+                                     - sourceFeatures.bandTransientMotionDb[(size_t) macroBand];
+            const float transientScale = (macroBand == 0) ? 0.14f
+                                       : (macroBand == 1) ? 0.22f
+                                       : (macroBand == 2) ? 0.44f
+                                                          : 0.36f;
+            const float transientShapeShiftDb = juce::jlimit(-1.35f, 1.35f,
+                transientGap * transientScale * edgeScale * referenceMatch.transientWeight
+                    * juce::jlimit(0.82f, 1.24f, assertiveBlend));
+
+            float persistenceShiftDb = 0.0f;
+            const float excessGap = sourceFeatures.eqExcessPersistence[(size_t) band]
+                                  - referenceFeatures.eqExcessPersistence[(size_t) band];
+            if (excessGap > 0.08f)
+                persistenceShiftDb -= juce::jlimit(0.0f, 2.05f,
+                                                   excessGap * 2.75f * referenceMatch.toneWeight * assertiveBlend);
+
+            const float deficitGap = sourceFeatures.eqDeficitPersistence[(size_t) band]
+                                   - referenceFeatures.eqDeficitPersistence[(size_t) band];
+            if (deficitGap > 0.08f)
+                persistenceShiftDb += juce::jlimit(0.0f, 1.85f,
+                                                   deficitGap * 2.45f * referenceMatch.toneWeight * assertiveBlend);
+
+            params.eqBandGains[(size_t) band] = clampEqGain(params.eqBandGains[(size_t) band]
+                                                          + tonalShiftDb
+                                                          + localShapeShiftDb
+                                                          + transientShapeShiftDb
+                                                          + persistenceShiftDb);
+        }
+
+        params.eqBandGains = smoothEqCurve(params.eqBandGains);
+        for (auto& gainDb : params.eqBandGains)
+        {
+            gainDb = clampEqGain(gainDb);
+            if (std::abs(gainDb) < 0.01f)
+                gainDb = 0.0f;
+        }
+
+        const auto maxPersistence = [] (const auto& values, int startBand, int endBand)
+        {
+            float value = 0.0f;
+            for (int band = startBand; band <= endBand; ++band)
+                value = juce::jmax(value, values[(size_t) band]);
+            return value;
+        };
+
+        const std::array<float, dynamicEqBandCount> sourceDynamicProblem {
+            maxPersistence(sourceFeatures.eqExcessPersistence, 2, 4)
+                + (positiveEvidence(sourceFeatures.lowVsMidDb - referenceFeatures.lowVsMidDb, 0.18f) * 0.22f),
+            maxPersistence(sourceFeatures.eqExcessPersistence, 5, 7)
+                + (positiveEvidence(sourceFeatures.eqDeviationDb[5] - referenceFeatures.eqDeviationDb[5], 0.25f) * 0.22f),
+            maxPersistence(sourceFeatures.eqExcessPersistence, 9, 10)
+                + (positiveEvidence(sourceFeatures.eqDeviationDb[10] - referenceFeatures.eqDeviationDb[10], 0.20f) * 0.28f),
+            maxPersistence(sourceFeatures.eqExcessPersistence, 11, 13)
+                + (positiveEvidence(sourceFeatures.highVsMidDb - referenceFeatures.highVsMidDb, 0.15f) * 0.18f)
+        };
+        const std::array<float, dynamicEqBandCount> referenceDynamicProblem {
+            maxPersistence(referenceFeatures.eqExcessPersistence, 2, 4),
+            maxPersistence(referenceFeatures.eqExcessPersistence, 5, 7),
+            maxPersistence(referenceFeatures.eqExcessPersistence, 9, 10),
+            maxPersistence(referenceFeatures.eqExcessPersistence, 11, 13)
+        };
+
+        for (int band = 0; band < dynamicEqBandCount; ++band)
+        {
+            const int macroBand = dynamicEqMacroBands[(size_t) band];
+            const float problemDelta = juce::jlimit(-1.0f, 1.6f,
+                                                    sourceDynamicProblem[(size_t) band]
+                                                      - referenceDynamicProblem[(size_t) band]);
+            const float transientDelta = juce::jlimit(-2.0f, 2.0f,
+                                                      referenceFeatures.bandTransientMotionDb[(size_t) macroBand]
+                                                        - sourceFeatures.bandTransientMotionDb[(size_t) macroBand]);
+            const float rangeDb = juce::jlimit(0.0f, 9.6f,
+                params.dynamicEqRanges[(size_t) band]
+                    + (problemDelta * 2.8f * referenceMatch.toneWeight * assertiveBlend)
+                    - (juce::jmax(0.0f, transientDelta) * 0.18f * referenceMatch.transientWeight));
+            const float targetBandRmsDb = pullTowards(sourceFeatures.bandRmsDb[(size_t) macroBand],
+                                                      referenceFeatures.bandRmsDb[(size_t) macroBand],
+                                                      0.16f);
+            const float targetTransientDb = pullTowards(sourceFeatures.bandTransientMotionDb[(size_t) macroBand],
+                                                        referenceFeatures.bandTransientMotionDb[(size_t) macroBand],
+                                                        0.55f);
+            const float thresholdBiasDb = (band <= 1) ? 0.15f : -0.35f;
+
+            setDynamicEqBand(params, band,
+                             deriveDynamicEqThreshold(targetBandRmsDb, rangeDb, targetTransientDb, thresholdBiasDb),
+                             rangeDb);
+        }
+
+        const float safeReferenceCrest = juce::jmax(referenceFeatures.crestDb, 5.8f);
+        const float compressionGuard = juce::jlimit(0.52f, 1.28f,
+                                                    juce::jlimit(0.66f, 1.08f, (safeReferenceCrest - 4.5f) / 3.6f)
+                                                        * referenceMatch.glueWeight * assertiveBlend);
+
+        auto matchBandCompression = [&compressionGuard, &referenceMatch, assertiveBlend] (float sourceBandCrest,
+                                                                                           float referenceBandCrest,
+                                                                                           float sourceBandRms,
+                                                                                           float referenceBandRms,
+                                                                                           float sourceBandTransient,
+                                                                                           float referenceBandTransient,
+                                                                                           float& thresh,
+                                                                                           float& ratio,
+                                                                                           float& attack,
+                                                                                           float& release,
+                                                                                           float minAttack,
+                                                                                           float maxAttack,
+                                                                                           float minRelease,
+                                                                                           float maxRelease,
+                                                                                           float transientAttackScale,
+                                                                                           float transientReleaseScale)
+        {
+            const float safeBandReferenceCrest = juce::jmax(referenceBandCrest, 5.4f);
+            float densityNeed = ((sourceBandCrest - safeBandReferenceCrest) * 0.28f)
+                              + ((referenceBandRms - sourceBandRms) * 0.11f);
+            densityNeed *= compressionGuard;
+
+            if (densityNeed > 0.0f)
+            {
+                thresh -= juce::jlimit(0.0f, 6.2f, densityNeed * 1.85f);
+                ratio += juce::jlimit(0.0f, 1.70f, densityNeed * 0.30f);
+                attack = juce::jlimit(minAttack, maxAttack, attack - (densityNeed * 3.6f));
+                release = juce::jlimit(minRelease, maxRelease, release - (densityNeed * 10.5f));
+            }
+            else
+            {
+                const float opennessNeed = juce::jlimit(0.0f, 1.6f, -densityNeed);
+                thresh += opennessNeed * 1.40f;
+                ratio = pullTowards(ratio, 1.06f, 0.34f * opennessNeed);
+                attack = juce::jlimit(minAttack, maxAttack, attack + (opennessNeed * 2.6f));
+                release = juce::jlimit(minRelease, maxRelease, release + (opennessNeed * 7.2f));
+            }
+
+            const float transientNeed = juce::jlimit(-2.2f, 2.2f,
+                (referenceBandTransient - sourceBandTransient)
+                    * referenceMatch.transientWeight
+                    * juce::jlimit(0.84f, 1.24f, assertiveBlend));
+
+            if (transientNeed > 0.0f)
+            {
+                thresh += juce::jlimit(0.0f, 1.8f, transientNeed * 0.72f);
+                ratio = pullTowards(ratio, 1.06f, juce::jlimit(0.0f, 0.34f, transientNeed * 0.16f));
+                attack = juce::jlimit(minAttack, maxAttack, attack + (transientNeed * transientAttackScale));
+                release = juce::jlimit(minRelease, maxRelease, release - (transientNeed * transientReleaseScale));
+            }
+            else if (transientNeed < 0.0f)
+            {
+                const float sustainNeed = -transientNeed;
+                thresh -= juce::jlimit(0.0f, 1.6f, sustainNeed * 0.66f);
+                ratio += juce::jlimit(0.0f, 0.38f, sustainNeed * 0.18f);
+                attack = juce::jlimit(minAttack, maxAttack, attack - (sustainNeed * transientAttackScale * 0.60f));
+                release = juce::jlimit(minRelease, maxRelease, release + (sustainNeed * transientReleaseScale * 0.74f));
+            }
+        };
+
+        matchBandCompression(sourceFeatures.bandCrestDb[0], referenceFeatures.bandCrestDb[0],
+                             sourceFeatures.bandRmsDb[0], referenceFeatures.bandRmsDb[0],
+                             sourceFeatures.bandTransientMotionDb[0], referenceFeatures.bandTransientMotionDb[0],
+                             params.lowThresh, params.lowRatio, params.lowAttack, params.lowRelease,
+                             5.0f, 50.0f, 80.0f, 240.0f, 4.6f, 11.0f);
+        matchBandCompression(sourceFeatures.bandCrestDb[1], referenceFeatures.bandCrestDb[1],
+                             sourceFeatures.bandRmsDb[1], referenceFeatures.bandRmsDb[1],
+                             sourceFeatures.bandTransientMotionDb[1], referenceFeatures.bandTransientMotionDb[1],
+                             params.lowMidThresh, params.lowMidRatio, params.lowMidAttack, params.lowMidRelease,
+                             5.0f, 40.0f, 70.0f, 220.0f, 4.0f, 9.0f);
+        matchBandCompression(sourceFeatures.bandCrestDb[2], referenceFeatures.bandCrestDb[2],
+                             sourceFeatures.bandRmsDb[2], referenceFeatures.bandRmsDb[2],
+                             sourceFeatures.bandTransientMotionDb[2], referenceFeatures.bandTransientMotionDb[2],
+                             params.highMidThresh, params.highMidRatio, params.highMidAttack, params.highMidRelease,
+                             2.0f, 20.0f, 60.0f, 180.0f, 2.2f, 7.4f);
+        matchBandCompression(sourceFeatures.bandCrestDb[3], referenceFeatures.bandCrestDb[3],
+                             sourceFeatures.bandRmsDb[3], referenceFeatures.bandRmsDb[3],
+                             sourceFeatures.bandTransientMotionDb[3], referenceFeatures.bandTransientMotionDb[3],
+                             params.highThresh, params.highRatio, params.highAttack, params.highRelease,
+                             1.0f, 12.0f, 50.0f, 160.0f, 1.5f, 5.8f);
+
+        auto matchWidth = [&referenceMatch] (float currentWidth,
+                                             float sourceSideRatio,
+                                             float referenceSideRatio,
+                                             float minWidth,
+                                             float maxWidth,
+                                             float scale)
+        {
+            const float widthShift = juce::jlimit(-0.48f, 0.48f,
+                                                  (referenceSideRatio - sourceSideRatio) * scale * referenceMatch.widthWeight);
+            return juce::jlimit(minWidth, maxWidth, currentWidth + widthShift);
+        };
+
+        params.lowWidth = matchWidth(params.lowWidth,
+                                     sourceFeatures.bandSideRatio[0],
+                                     referenceFeatures.bandSideRatio[0],
+                                     0.0f, 0.25f, 0.38f);
+        params.lowMidWidth = matchWidth(params.lowMidWidth,
+                                        sourceFeatures.bandSideRatio[1],
+                                        referenceFeatures.bandSideRatio[1],
+                                        0.80f, 1.55f, 0.55f);
+        params.highMidWidth = matchWidth(params.highMidWidth,
+                                         sourceFeatures.bandSideRatio[2],
+                                         referenceFeatures.bandSideRatio[2],
+                                         0.95f, 1.80f, 0.78f);
+        params.highWidth = matchWidth(params.highWidth,
+                                      sourceFeatures.bandSideRatio[3],
+                                      referenceFeatures.bandSideRatio[3],
+                                      1.0f, 1.95f, 0.92f);
+
+        const float protectedLowWidthMax = juce::jlimit(0.05f, 0.22f,
+                                                        0.06f
+                                                          + (sourceFeatures.bandSideRatio[0] * 0.10f)
+                                                          + (0.06f * referenceMatch.lowEndSafety));
+        params.lowWidth = juce::jmin(params.lowWidth, protectedLowWidthMax);
+
+        if (referenceMatch.lowEndSafety < 0.28f)
+            params.lowMidWidth = juce::jmin(params.lowMidWidth, 1.14f);
+
+        if (referenceFeatures.stereoCorrelation < 0.12f || referenceFeatures.sideRatio > 0.76f)
+        {
+            params.highMidWidth = juce::jmin(params.highMidWidth, 1.18f);
+            params.highWidth = juce::jmin(params.highWidth, 1.24f);
+        }
+
+        const float safeReferenceProgramLoudnessDb = juce::jlimit(-16.0f, -6.8f,
+                                                                  referenceProgramLoudnessDb);
+        const float loudnessDeltaDb = juce::jlimit(-4.5f, 8.2f,
+                                                   (safeReferenceProgramLoudnessDb - sourceProgramLoudnessDb)
+                                                     * referenceMatch.loudnessWeight * assertiveBlend);
+        const float referenceTruePeakTargetDb = (referenceFeatures.truePeakDb > -0.25f)
+                                              ? -0.45f
+                                              : juce::jlimit(-1.1f, -0.25f,
+                                                             referenceFeatures.truePeakDb - 0.10f);
+
+        params.maximizerThreshold = juce::jlimit(-12.8f, -0.6f,
+                                                 params.maximizerThreshold - (loudnessDeltaDb * 1.10f));
+        params.maximizerCeiling = juce::jlimit(-1.1f, -0.25f,
+                                               pullTowards(params.maximizerCeiling,
+                                                           referenceTruePeakTargetDb,
+                                                           0.38f + (0.78f * referenceMatch.loudnessWeight)));
+        params.maximizerRelease = juce::jlimit(60.0f, 180.0f,
+                                               params.maximizerRelease
+                                                 - juce::jlimit(-24.0f, 24.0f,
+                                                                (sourceFeatures.crestDb - safeReferenceCrest)
+                                                                    * 5.6f * referenceMatch.glueWeight * assertiveBlend));
+
+        const float overallTransientGap = juce::jlimit(-2.5f, 2.5f,
+                                                       referenceFeatures.transientMotionDb
+                                                         - sourceFeatures.transientMotionDb);
+        if (overallTransientGap > 0.0f)
+        {
+            params.maximizerThreshold = juce::jlimit(-12.8f, -0.6f,
+                                                     params.maximizerThreshold + (overallTransientGap * 0.42f));
+            params.maximizerRelease = juce::jlimit(60.0f, 180.0f,
+                                                   params.maximizerRelease + (overallTransientGap * 6.5f));
+        }
+        else if (overallTransientGap < 0.0f)
+        {
+            const float sustainGap = -overallTransientGap;
+            params.maximizerThreshold = juce::jlimit(-12.8f, -0.6f,
+                                                     params.maximizerThreshold - (sustainGap * 0.26f));
+            params.maximizerRelease = juce::jlimit(60.0f, 180.0f,
+                                                   params.maximizerRelease - (sustainGap * 4.2f));
+        }
+
+        float outputTrimDb = juce::Decibels::gainToDecibels(juce::jmax(params.outputGain, 1.0e-4f));
+        outputTrimDb = juce::jlimit(-4.0f, 2.4f, outputTrimDb + (loudnessDeltaDb * 0.30f));
+        params.outputGain = juce::Decibels::decibelsToGain(outputTrimDb);
+
+        if (referenceMatch.overallConfidence < 0.22f)
+        {
+            params.lowRatio = pullTowards(params.lowRatio, 1.22f, 0.16f);
+            params.lowMidRatio = pullTowards(params.lowMidRatio, 1.18f, 0.16f);
+            params.highMidRatio = pullTowards(params.highMidRatio, 1.12f, 0.18f);
+            params.highRatio = pullTowards(params.highRatio, 1.08f, 0.18f);
+            params.highMidWidth = juce::jmin(params.highMidWidth, 1.22f);
+            params.highWidth = juce::jmin(params.highWidth, 1.30f);
+        }
+
+        const float saturationRisk = estimateReferenceSaturationRisk(params,
+                                                                     sourceFeatures,
+                                                                     sourceProgramLoudnessDb,
+                                                                     safeReferenceProgramLoudnessDb);
+        if (saturationRisk > 0.0f)
+            softenReferenceParametersForSafety(params, saturationRisk);
+
+        params.lowRatio = juce::jlimit(1.0f, 6.4f, params.lowRatio);
+        params.lowMidRatio = juce::jlimit(1.0f, 6.0f, params.lowMidRatio);
+        params.highMidRatio = juce::jlimit(1.0f, 5.2f, params.highMidRatio);
+        params.highRatio = juce::jlimit(1.0f, 4.6f, params.highRatio);
+        params.lowThresh = juce::jlimit(-24.0f, -6.0f, params.lowThresh);
+        params.lowMidThresh = juce::jlimit(-24.0f, -6.0f, params.lowMidThresh);
+        params.highMidThresh = juce::jlimit(-24.0f, -6.0f, params.highMidThresh);
+        params.highThresh = juce::jlimit(-24.0f, -6.0f, params.highThresh);
+        params.lowWidth = juce::jlimit(0.0f, 0.25f, params.lowWidth);
+        params.lowMidWidth = juce::jlimit(0.80f, 1.55f, params.lowMidWidth);
+        params.highMidWidth = juce::jlimit(0.95f, 1.80f, params.highMidWidth);
+        params.highWidth = juce::jlimit(1.0f, 1.95f, params.highWidth);
+        params.maximizerThreshold = juce::jlimit(-12.8f, -0.6f, params.maximizerThreshold);
+        params.maximizerCeiling = juce::jlimit(-1.1f, -0.25f, params.maximizerCeiling);
         params.maximizerRelease = juce::jlimit(60.0f, 180.0f, params.maximizerRelease);
 
         return params;

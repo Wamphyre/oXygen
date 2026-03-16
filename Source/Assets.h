@@ -67,5 +67,27 @@ namespace oxygen
      <path d="M-40,-40 L40,40 M-40,40 L40,-40" stroke="url(#neonGrad)" stroke-width="6" stroke-linecap="round" />
   </g>
 </svg>)svg";
+
+        static const char* oxygenReferenceIconSvg = R"svg(<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="matchGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF00FF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00FFFF;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <circle cx="256" cy="256" r="156" stroke="url(#matchGrad)" stroke-width="16" fill="none" opacity="0.82" filter="url(#glow)"/>
+  <circle cx="256" cy="256" r="122" stroke="#181b24" stroke-width="8" fill="none"/>
+  <path d="M126 205 C160 180 192 180 222 205 S284 230 316 205 S366 180 388 197" stroke="#FF4DDB" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#glow)"/>
+  <path d="M126 307 C160 332 192 332 222 307 S284 282 316 307 S366 332 388 315" stroke="#28F0FF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#glow)"/>
+  <path d="M228 236 L286 294" stroke="#F6FBFF" stroke-width="14" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M286 294 L286 258 M286 294 L250 294" stroke="#F6FBFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+</svg>)svg";
     }
 }

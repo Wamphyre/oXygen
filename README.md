@@ -1,8 +1,8 @@
 # oXygen Mastering Suite
 
-**oXygen** is a free and open-source mastering plugin built with C++ and JUCE. The project is focused on a practical mastering workflow: corrective EQ, multiband control, stereo shaping, final loudness, and an automatic Master Assistant that listens to the incoming mix and writes settings into the modules.
+**oXygen** is a free and open-source mastering plugin built with C++ and JUCE. The project is focused on a practical mastering workflow: corrective EQ, dynamic resonance control, multiband control, stereo shaping, final loudness, an automatic Master Assistant that listens to the incoming mix and writes settings into the modules, and a Reference Match workflow that learns from an external reference file and adapts the rack toward that target.
 
-![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.1-brightgreen)
 ![Format](https://img.shields.io/badge/format-VST3-blue)
 ![Codebase](https://img.shields.io/badge/codebase-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 ![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Windows%20active%20%7C%20Linux%20active-green)
@@ -23,6 +23,7 @@
 - [Build from Source](#build-from-source)
 - [Usage](#usage)
 - [Usage Guide](#usage-guide)
+- [Reference Match](#reference-match)
 - [Manual Control](#manual-control)
 - [Support & Donations](#support--donations)
 
@@ -30,7 +31,9 @@
 
 ### Core Functionality
 - **Master Assistant**: Listens to up to 60 seconds of incoming audio, analyzes tonal balance, dynamics, stereo spread, loudness, and true peak behaviour, then proposes settings for the processing chain.
+- **Reference Match**: Loads an external `WAV` or `FLAC` reference, analyzes up to 60 seconds of that file plus up to 60 seconds of your incoming mix, then writes module settings that move the chain toward the reference profile, with strong priority on EQ matching.
 - **15-Band Graphic EQ**: Fixed-band mastering EQ from `30 Hz` to `20 kHz`, with smoothed gain changes and a more musical Q contour across the spectrum.
+- **Dynamic EQ**: A 4-band dynamic cut stage focused on low cleanup, body control, presence taming, and air smoothing. It can be driven manually or written automatically by both Master Assistant and Reference Match.
 - **4-Band Multiband Compressor**: Low, Low-Mid, High-Mid, and High bands with stereo-linked detection, hybrid peak/RMS behaviour, and softer knee handling for better glue.
 - **Stereo Imager**: Multiband width control with safeguards intended to keep the low end more mono-compatible and prevent obviously unstable widening.
 - **Gain Stage**: Dedicated trim stage for workflow and level management inside the chain.
@@ -38,7 +41,7 @@
 
 ### Audio Engine
 - **Modular Signal Chain**: Built on `juce::AudioProcessorGraph` and designed around a mastering rack workflow.
-- **Current Module Order**: `Graphic EQ -> Multiband Comp -> Stereo Imager -> Gain -> Maximizer`.
+- **Current Module Order**: `Graphic EQ -> Dynamic EQ -> Multiband Comp -> Stereo Imager -> Gain -> Maximizer`.
 - **Reorder / Bypass / Collapse**: Each module can be moved, bypassed, or collapsed from the rack UI.
 - **Original vs Processed Analyzer**: The spectrum display overlays the incoming signal and the processed output so tonal changes can be checked visually.
 - **Mono / Stereo Compatibility**: The plugin supports mono and stereo bus layouts and routes the chain coherently through to the final output.
@@ -173,15 +176,23 @@
 
 ### Usage Guide
 1. **Insert oXygen on your master bus**. The plugin is mainly intended for stereo mix-bus / master-bus mastering, but it can also be used on stems or individual tracks when needed.
-2. **Feed it representative material**. If you plan to use the Master Assistant, play the loudest or most information-rich section of the mix rather than a quiet intro.
+2. **Feed it representative material**. If you plan to use Master Assistant or Reference Match, play the loudest or most information-rich section of the mix rather than a quiet intro.
 3. **Run Master Assist**. The plugin enters a listening state, shows a progress window, and captures up to 60 seconds of real incoming audio.
-4. **Confirm the proposal**. After the listening pass, oXygen generates suggested settings and asks for confirmation before writing them into the modules.
+4. **Confirm the proposal**. After the listening pass, oXygen generates suggested settings and asks for confirmation before writing them into the modules, including `Dynamic EQ` when cleanup or resonance control is needed.
 5. **Check the analyzer overlay**. Use the `Original` and `Processed` spectrum curves to verify what changed instead of judging only by output loudness.
 6. **Refine manually**. Treat the assistant as a starting point, then fine-tune EQ, compression, stereo width, gain staging, and maximizer settings for the final result.
 7. **Level-match your decisions**. Louder often sounds better at first; compare with care when deciding whether processing is actually improving the mix.
 
+### Reference Match
+1. **Click `REFERENCE`** and load a `WAV` or `FLAC` file.
+2. **Let oXygen analyze the reference file**. The plugin extracts a representative slice of up to 60 seconds from the reference.
+3. **Play your own mix through the plugin**. oXygen then listens to up to 60 seconds of the incoming material in real time.
+4. **Confirm the match**. After analysis, the plugin proposes a rack state that moves your master toward the reference, with EQ profile matching as the main priority and dynamics, dynamic EQ cleanup, stereo width, and loudness following behind it.
+5. **Refine to taste**. Reference Match is intended to get you close to the target quickly; the final EQ, compression, image, and loudness decisions can still be adjusted manually.
+
 ### Manual Control
 - **Graphic EQ**: Use it for broad tonal correction and enhancement. Remove obvious mud, harshness, or imbalance before pushing top-end shine.
+- **Dynamic EQ**: Use it to catch moving low-mid build-up, upper-mid bite, or overly sharp air bands without applying a constant static cut.
 - **Multiband Comp**: Use it for glue and control, not constant pumping. Small moves usually work better than extreme thresholds.
 - **Stereo Imager**: Widen upper bands carefully. Keep low frequencies conservative if you want safer mono translation.
 - **Gain**: Use this stage to manage level into the maximizer and keep the overall chain under control.

@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 #include "Modules/GainModule.h"
 #include "Modules/EqualizerModule.h"
+#include "Modules/DynamicEqModule.h"
 #include "Modules/MultibandCompressorModule.h"
 #include "Modules/MaximizerModule.h"
 #include "Modules/StereoImagerModule.h"
@@ -14,6 +15,7 @@ namespace
     constexpr auto moduleOrderStateType = "MODULE_ORDER";
     constexpr auto moduleStatesType = "MODULE_STATES";
     constexpr auto moduleStateType = "MODULE";
+    constexpr double referenceAnalysisWindowSeconds = 60.0;
 
     void storeParameters(juce::ValueTree& moduleState, juce::AudioProcessor& processor)
     {
@@ -83,6 +85,126 @@ namespace
             assistantHistoryNumValidSamples = juce::jmin(assistantHistoryNumValidSamples + 1,
                                                          assistantHistoryCapacity);
         }
+    }
+
+    bool isSupportedReferenceFile(const juce::File& file)
+    {
+        return file.existsAsFile() && file.hasFileExtension("wav;flac");
+    }
+
+    int64_t findRepresentativeExcerptStart(juce::AudioFormatReader& reader, int64_t excerptLengthSamples)
+    {
+        if (reader.lengthInSamples <= excerptLengthSamples)
+            return 0;
+
+        const int numChannels = juce::jlimit(1, 2, (int) reader.numChannels);
+        const int64_t scanBlockSize = juce::jmax<int64_t>(1, (int64_t) std::llround(reader.sampleRate));
+        const int64_t windowBlocks = juce::jmax<int64_t>(1, (excerptLengthSamples + scanBlockSize - 1) / scanBlockSize);
+        const int64_t numBlocks = (reader.lengthInSamples + scanBlockSize - 1) / scanBlockSize;
+
+        juce::AudioBuffer<float> scanBuffer(numChannels, (int) scanBlockSize);
+        std::vector<double> blockMeanSquares;
+        blockMeanSquares.reserve((size_t) numBlocks);
+
+        for (int64_t blockIndex = 0; blockIndex < numBlocks; ++blockIndex)
+        {
+            const int64_t startSample = blockIndex * scanBlockSize;
+            const int samplesToRead = (int) juce::jmin<int64_t>(scanBlockSize, reader.lengthInSamples - startSample);
+            scanBuffer.clear();
+
+            if (!reader.read(&scanBuffer, 0, samplesToRead, startSample, true, true))
+            {
+                blockMeanSquares.push_back(0.0);
+                continue;
+            }
+
+            double sumSquares = 0.0;
+            for (int channel = 0; channel < numChannels; ++channel)
+            {
+                const auto* channelData = scanBuffer.getReadPointer(channel);
+                for (int sample = 0; sample < samplesToRead; ++sample)
+                    sumSquares += (double) channelData[sample] * channelData[sample];
+            }
+
+            const double normalization = (double) juce::jmax(1, samplesToRead * numChannels);
+            blockMeanSquares.push_back(sumSquares / normalization);
+        }
+
+        double currentWindowEnergy = 0.0;
+        double bestWindowEnergy = -1.0;
+        int64_t bestWindowStartBlock = 0;
+
+        for (size_t blockIndex = 0; blockIndex < blockMeanSquares.size(); ++blockIndex)
+        {
+            currentWindowEnergy += blockMeanSquares[blockIndex];
+            if (blockIndex >= (size_t) windowBlocks)
+                currentWindowEnergy -= blockMeanSquares[blockIndex - (size_t) windowBlocks];
+
+            if (blockIndex + 1 >= (size_t) windowBlocks && currentWindowEnergy > bestWindowEnergy)
+            {
+                bestWindowEnergy = currentWindowEnergy;
+                bestWindowStartBlock = (int64_t) blockIndex + 1 - windowBlocks;
+            }
+        }
+
+        return juce::jlimit<int64_t>(0, juce::jmax<int64_t>(0, reader.lengthInSamples - excerptLengthSamples),
+                                     bestWindowStartBlock * scanBlockSize);
+    }
+
+    bool loadReferenceAudioExcerpt(const juce::File& file,
+                                   juce::AudioBuffer<float>& destinationBuffer,
+                                   double& destinationSampleRate,
+                                   juce::String& errorMessage)
+    {
+        if (!isSupportedReferenceFile(file))
+        {
+            errorMessage = "Only WAV and FLAC reference files are supported.";
+            return false;
+        }
+
+        juce::AudioFormatManager formatManager;
+        formatManager.registerFormat(new juce::WavAudioFormat(), true);
+        formatManager.registerFormat(new juce::FlacAudioFormat(), true);
+
+        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+        if (reader == nullptr)
+        {
+            errorMessage = "Unable to open the selected reference file.";
+            return false;
+        }
+
+        const int numChannels = juce::jlimit(1, 2, (int) reader->numChannels);
+        if (numChannels <= 0 || reader->lengthInSamples <= 0)
+        {
+            errorMessage = "The selected reference file does not contain readable audio.";
+            return false;
+        }
+
+        destinationSampleRate = reader->sampleRate;
+        const int64_t maxExcerptSamples = juce::jmax<int64_t>(1024,
+                                                              (int64_t) std::llround(destinationSampleRate * referenceAnalysisWindowSeconds));
+        const int64_t excerptLengthSamples = juce::jmin(reader->lengthInSamples, maxExcerptSamples);
+        const int64_t excerptStartSample = findRepresentativeExcerptStart(*reader, excerptLengthSamples);
+        const int samplesToRead = (int) excerptLengthSamples;
+
+        juce::AudioBuffer<float> rawBuffer(numChannels, samplesToRead);
+        rawBuffer.clear();
+        if (!reader->read(&rawBuffer, 0, samplesToRead, excerptStartSample, true, true))
+        {
+            errorMessage = "Unable to read audio data from the selected reference file.";
+            return false;
+        }
+
+        destinationBuffer.setSize(2, samplesToRead);
+        destinationBuffer.clear();
+        destinationBuffer.copyFrom(0, 0, rawBuffer, 0, 0, samplesToRead);
+
+        if (numChannels > 1)
+            destinationBuffer.copyFrom(1, 0, rawBuffer, 1, 0, samplesToRead);
+        else
+            destinationBuffer.copyFrom(1, 0, rawBuffer, 0, 0, samplesToRead);
+
+        return true;
     }
 
 }
@@ -303,6 +425,7 @@ void OxygenAudioProcessor::initialiseGraph()
     
     // Add Modules (Initial Order)
     moduleNodes.push_back(mainProcessorGraph->addNode(std::make_unique<oxygen::EqualizerModule>()));
+    moduleNodes.push_back(mainProcessorGraph->addNode(std::make_unique<oxygen::DynamicEqModule>()));
     moduleNodes.push_back(mainProcessorGraph->addNode(std::make_unique<oxygen::MultibandCompressorModule>()));
     moduleNodes.push_back(mainProcessorGraph->addNode(std::make_unique<oxygen::StereoImagerModule>()));
     moduleNodes.push_back(mainProcessorGraph->addNode(std::make_unique<oxygen::GainModule>()));
@@ -419,6 +542,84 @@ bool OxygenAudioProcessor::applyMasterAssistantSuggestion(const oxygen::Masterin
     return true;
 }
 
+bool OxygenAudioProcessor::loadReferenceAudioFile(const juce::File& referenceFile, juce::String& errorMessage)
+{
+    juce::AudioBuffer<float> referenceBuffer;
+    double referenceSampleRate = 44100.0;
+    if (!loadReferenceAudioExcerpt(referenceFile, referenceBuffer, referenceSampleRate, errorMessage))
+        return false;
+
+    const juce::SpinLock::ScopedLockType referenceLock(loadedReferenceLock);
+    loadedReferenceAudioBuffer = std::move(referenceBuffer);
+    loadedReferenceSampleRate = referenceSampleRate;
+    loadedReferenceFileName = referenceFile.getFileName();
+    return true;
+}
+
+void OxygenAudioProcessor::clearLoadedReferenceAudio()
+{
+    const juce::SpinLock::ScopedLockType referenceLock(loadedReferenceLock);
+    loadedReferenceAudioBuffer.setSize(0, 0);
+    loadedReferenceSampleRate = 44100.0;
+    loadedReferenceFileName.clear();
+}
+
+bool OxygenAudioProcessor::hasLoadedReferenceAudio() const
+{
+    const juce::SpinLock::ScopedLockType referenceLock(loadedReferenceLock);
+    return loadedReferenceAudioBuffer.getNumSamples() > 0;
+}
+
+juce::String OxygenAudioProcessor::getLoadedReferenceName() const
+{
+    const juce::SpinLock::ScopedLockType referenceLock(loadedReferenceLock);
+    return loadedReferenceFileName;
+}
+
+bool OxygenAudioProcessor::createReferenceMatchSuggestion(oxygen::MasteringParameters& params, juce::String& errorMessage)
+{
+    const float minSignalGain = juce::Decibels::decibelsToGain(assistantMinSignalDb);
+    float capturedPeak = 0.0f;
+    {
+        const juce::SpinLock::ScopedLockType historyLock(assistantHistoryLock);
+        capturedPeak = assistantCapturePeak;
+    }
+
+    if (capturedPeak < minSignalGain)
+    {
+        errorMessage = "No mix signal was captured for matching.";
+        return false;
+    }
+
+    juce::AudioBuffer<float> referenceBuffer;
+    double referenceSampleRate = 44100.0;
+    {
+        const juce::SpinLock::ScopedLockType referenceLock(loadedReferenceLock);
+        if (loadedReferenceAudioBuffer.getNumSamples() < 1024)
+        {
+            errorMessage = "No valid reference file is loaded.";
+            return false;
+        }
+
+        referenceBuffer = loadedReferenceAudioBuffer;
+        referenceSampleRate = loadedReferenceSampleRate;
+    }
+
+    auto sourceBuffer = buildAssistantAnalysisBuffer();
+    if (sourceBuffer.getNumSamples() < 1024)
+    {
+        errorMessage = "Unable to capture enough mix audio for matching.";
+        return false;
+    }
+
+    params = (inferenceEngine != nullptr)
+           ? inferenceEngine->matchReference(sourceBuffer, assistantHistorySampleRate,
+                                             referenceBuffer, referenceSampleRate)
+           : oxygen::MasteringParameters {};
+
+    return true;
+}
+
 void OxygenAudioProcessor::applyMasteringParameters(const oxygen::MasteringParameters& params)
 {
     for (auto& node : mainProcessorGraph->getNodes())
@@ -445,6 +646,17 @@ void OxygenAudioProcessor::applyMasteringParameters(const oxygen::MasteringParam
 
                 for (int band = 0; band < oxygen::MasteringParameters::eqBandCount; ++band)
                     setParameter(eqModule->apvts, "Gain" + juce::String(band), params.eqBandGains[(size_t) band]);
+            }
+            else if (auto* dynamicEqModule = dynamic_cast<oxygen::DynamicEqModule*>(processor))
+            {
+                setParameter(dynamicEqModule->apvts, "LowThresh", params.dynamicEqThresholds[0]);
+                setParameter(dynamicEqModule->apvts, "LowRange", params.dynamicEqRanges[0]);
+                setParameter(dynamicEqModule->apvts, "LowMidThresh", params.dynamicEqThresholds[1]);
+                setParameter(dynamicEqModule->apvts, "LowMidRange", params.dynamicEqRanges[1]);
+                setParameter(dynamicEqModule->apvts, "HighMidThresh", params.dynamicEqThresholds[2]);
+                setParameter(dynamicEqModule->apvts, "HighMidRange", params.dynamicEqRanges[2]);
+                setParameter(dynamicEqModule->apvts, "HighThresh", params.dynamicEqThresholds[3]);
+                setParameter(dynamicEqModule->apvts, "HighRange", params.dynamicEqRanges[3]);
             }
             else if (auto* compModule = dynamic_cast<oxygen::MultibandCompressorModule*>(processor))
             {

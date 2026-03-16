@@ -44,8 +44,11 @@ namespace oxygen
     struct MasteringParameters
     {
         static constexpr int eqBandCount = 15;
+        static constexpr int dynamicEqBandCount = 4;
 
         std::array<float, eqBandCount> eqBandGains {};
+        std::array<float, dynamicEqBandCount> dynamicEqThresholds { -26.0f, -28.0f, -30.0f, -32.0f };
+        std::array<float, dynamicEqBandCount> dynamicEqRanges {};
 
         float lowMidX = 120.0f;
         float midHighX = 1400.0f;
@@ -98,6 +101,10 @@ namespace oxygen
         MasteringParameters predict(const juce::AudioBuffer<float>& recentAudio,
                                     double sampleRate,
                                     const AssistantContext& context);
+        MasteringParameters matchReference(const juce::AudioBuffer<float>& sourceAudio,
+                                           double sourceSampleRate,
+                                           const juce::AudioBuffer<float>& referenceAudio,
+                                           double referenceSampleRate);
 
         bool isModelLoaded() const { return modelLoaded; }
 

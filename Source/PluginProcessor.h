@@ -75,6 +75,11 @@ public:
     bool triggerMasterAssistant();
     bool createMasterAssistantSuggestion(oxygen::MasteringParameters& params);
     bool applyMasterAssistantSuggestion(const oxygen::MasteringParameters& params);
+    bool loadReferenceAudioFile(const juce::File& referenceFile, juce::String& errorMessage);
+    void clearLoadedReferenceAudio();
+    bool hasLoadedReferenceAudio() const;
+    juce::String getLoadedReferenceName() const;
+    bool createReferenceMatchSuggestion(oxygen::MasteringParameters& params, juce::String& errorMessage);
     void resetAssistantAnalysisCapture();
     bool hasAssistantCapturedSignal() const;
     void setGraphChangedCallback(std::function<void()> callback);
@@ -95,6 +100,10 @@ private:
     int assistantHistoryCapacity = 32768;
     float assistantCapturePeak = 0.0f;
     double assistantHistorySampleRate = 44100.0;
+    juce::AudioBuffer<float> loadedReferenceAudioBuffer;
+    mutable juce::SpinLock loadedReferenceLock;
+    double loadedReferenceSampleRate = 44100.0;
+    juce::String loadedReferenceFileName;
     std::function<void()> graphChangedCallback;
 
     juce::StringArray getCurrentModuleOrder() const;

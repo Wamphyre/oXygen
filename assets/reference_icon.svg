@@ -1,0 +1,24 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="matchGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF00FF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00FFFF;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="100" ry="100" fill="#0a0a0a" stroke="#333" stroke-width="2"/>
+  <circle cx="256" cy="256" r="180" stroke="url(#matchGrad)" stroke-width="10" fill="none" opacity="0.78" filter="url(#glow)"/>
+  <circle cx="256" cy="256" r="160" stroke="#121212" stroke-width="20" fill="none"/>
+  <path d="M126 202 C162 176 196 176 228 202 S292 228 324 202 S370 178 386 188" stroke="#FF4DDB" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#glow)"/>
+  <path d="M126 310 C162 336 196 336 228 310 S292 284 324 310 S370 334 386 324" stroke="#28F0FF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#glow)"/>
+  <path d="M176 134 H320" stroke="#F6FBFF" stroke-width="14" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M288 102 L320 134 L288 166" stroke="#F6FBFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#glow)"/>
+  <path d="M336 378 H192" stroke="#F6FBFF" stroke-width="14" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M224 346 L192 378 L224 410" stroke="#F6FBFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#glow)"/>
+</svg>
