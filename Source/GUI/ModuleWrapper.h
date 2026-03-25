@@ -7,7 +7,10 @@ namespace oxygen
     class ModuleWrapper : public juce::Component
     {
     public:
-        ModuleWrapper(const juce::String& name, std::unique_ptr<juce::AudioProcessorEditor> editor, juce::RangedAudioParameter* bypassParam);
+        ModuleWrapper(const juce::String& name,
+                      std::unique_ptr<juce::AudioProcessorEditor> editor,
+                      juce::RangedAudioParameter* bypassParam,
+                      juce::AudioProcessor* processor);
         ~ModuleWrapper() override;
 
         void paint(juce::Graphics& g) override;
@@ -29,8 +32,11 @@ namespace oxygen
         juce::TextButton collapseButton { "^" };
         juce::TextButton upButton { "U" };
         juce::TextButton downButton { "D" };
+        juce::ComboBox modeSelector;
         
         std::unique_ptr<juce::ParameterAttachment> bypassAttachment;
+        using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+        std::unique_ptr<ComboBoxAttachment> modeAttachment;
         
         bool collapsed = false;
         const int headerHeight = 30;

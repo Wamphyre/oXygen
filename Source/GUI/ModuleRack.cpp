@@ -9,20 +9,9 @@ ModuleRack::ModuleRack(OxygenAudioProcessor& p) : audioProcessor(p)
 {
     contentComponent = std::make_unique<juce::Component>();
     setViewedComponent(contentComponent.get(), false);
-    
-    // Auto-show scrollbars only if needed, otherwise hidden
-    setScrollBarsShown(true, false, false, true); // (vertical, horizontal, showVerticalHeader, showHorizontalHeader) -> wait, Viewport API is (bool vertical, bool horizontal)
-    // Actually Viewport doesn't have auto-show easily exposed in some versions, but let's try standard behavior.
-    // The user said "NO QUEREMOS SCROLL" (we don't want scroll). 
-    // If the window is big enough, it won't scroll.
-    setScrollBarsShown(false, false); // Let's try disabling it initially, or rely on auto-behavior if we don't force it.
-    // Better: setScrollBarsShown(true, false) is what it was.
-    // If we simply resize the container to be large enough, scrollbars won't appear.
-    // BUT user said "WITHOUT THAT INFERNAL SCROLL". 
-    // Let's keep it enabled but ensure sizing is correct so it doesn't trigger. 
-    // Actually, maybe they specifically hate the visual scrollbar. 
-    // Let's set it to false and ensure resizing works.
-    setScrollBarsShown(false, false);
+
+    // Show the vertical scrollbar only when the rack is taller than the viewport.
+    setScrollBarsShown(true, false);
 }
 
 ModuleRack::~ModuleRack()
@@ -49,7 +38,10 @@ void ModuleRack::updateModuleList()
             
             if (processor->hasEditor())
             {
-                auto* wrapper = new oxygen::ModuleWrapper(name, std::unique_ptr<juce::AudioProcessorEditor>(processor->createEditor()), bypassParam);
+                auto* wrapper = new oxygen::ModuleWrapper(name,
+                                                          std::unique_ptr<juce::AudioProcessorEditor>(processor->createEditor()),
+                                                          bypassParam,
+                                                          processor);
                 moduleWrappers.add(wrapper);
                 contentComponent->addAndMakeVisible(wrapper);
                 
@@ -68,15 +60,23 @@ void ModuleRack::updateModuleList()
 void ModuleRack::resized()
 {
     juce::Viewport::resized();
-    
+
+    int contentHeight = 0;
+    for (auto* child : contentComponent->getChildren())
+        contentHeight += child->getHeight() + 5;
+
+    if (contentHeight > 0)
+        contentHeight -= 5;
+
+    const bool needsVerticalScroll = contentHeight > getMaximumVisibleHeight();
+    const int contentWidth = juce::jmax(1, getWidth() - (needsVerticalScroll ? getScrollBarThickness() : 0));
+
     int y = 0;
-    int width = getWidth() - (getVerticalScrollBar().isVisible() ? getVerticalScrollBar().getWidth() : 0);
-    
     for (auto* child : contentComponent->getChildren())
     {
-        child->setBounds(0, y, width, child->getHeight());
+        child->setBounds(0, y, contentWidth, child->getHeight());
         y += child->getHeight() + 5;
     }
-    
-    contentComponent->setSize(width, y);
+
+    contentComponent->setSize(contentWidth, juce::jmax(1, contentHeight));
 }

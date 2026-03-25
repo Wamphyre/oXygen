@@ -2,7 +2,7 @@
 
 **oXygen** is a free and open-source mastering plugin built with C++ and JUCE. The project is focused on a practical mastering workflow: corrective EQ, dynamic resonance control, multiband control, stereo shaping, final loudness, an automatic Master Assistant that listens to the incoming mix and writes settings into the modules, and a Reference Match workflow that learns from an external reference file and adapts the rack toward that target.
 
-![Version](https://img.shields.io/badge/version-1.0.1-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.2-brightgreen)
 ![Format](https://img.shields.io/badge/format-VST3-blue)
 ![Codebase](https://img.shields.io/badge/codebase-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 ![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Windows%20active%20%7C%20Linux%20active-green)
@@ -16,6 +16,7 @@
 ## Index
 
 - [Features](#features)
+- [Documentation](#documentation)
 - [System Requirements](#system-requirements)
 - [macOS Requirements](#macos)
 - [Windows Requirements](#windows)
@@ -37,15 +38,21 @@
 - **4-Band Multiband Compressor**: Low, Low-Mid, High-Mid, and High bands with stereo-linked detection, hybrid peak/RMS behaviour, and softer knee handling for better glue.
 - **Stereo Imager**: Multiband width control with safeguards intended to keep the low end more mono-compatible and prevent obviously unstable widening.
 - **Gain Stage**: Dedicated trim stage for workflow and level management inside the chain.
-- **Maximizer**: Final loudness processor with lookahead, internal oversampling, adaptive release, and host latency reporting.
+- **Maximizer**: Final loudness processor with hybrid true-peak limiting, internal oversampling, adaptive release, `Transparent` / `Loud` / `Safe` modes, latency-compensated bypass, and host latency reporting.
+- **Mode-Aware Automation**: `Master Assistant` and `Reference Match` now choose the maximizer mode automatically as part of their suggestion set.
 
 ### Audio Engine
 - **Modular Signal Chain**: Built on `juce::AudioProcessorGraph` and designed around a mastering rack workflow.
 - **Current Module Order**: `Graphic EQ -> Dynamic EQ -> Multiband Comp -> Stereo Imager -> Gain -> Maximizer`.
-- **Reorder / Bypass / Collapse**: Each module can be moved, bypassed, or collapsed from the rack UI.
+- **Reorder / Bypass / Collapse**: Each module can be moved, bypassed, or collapsed from the rack UI. The maximizer mode selector lives in the module header so the rack layout stays compact.
 - **Original vs Processed Analyzer**: The spectrum display overlays the incoming signal and the processed output so tonal changes can be checked visually.
 - **Mono / Stereo Compatibility**: The plugin supports mono and stereo bus layouts and routes the chain coherently through to the final output.
 - **Single and Double Precision Host Paths**: The plugin accepts both float and double precision processing from the host. DSP refinement is still ongoing module by module.
+
+## Documentation
+
+- **User Manual**: See `user_manual.pdf` for the end-user manual included in the repository.
+- **Editable Manual Source**: The PDF is generated from `docs/user_manual.md`.
 
 ## System Requirements
 
@@ -180,7 +187,7 @@
 3. **Run Master Assist**. The plugin enters a listening state, shows a progress window, and captures up to 60 seconds of real incoming audio.
 4. **Confirm the proposal**. After the listening pass, oXygen generates suggested settings and asks for confirmation before writing them into the modules, including `Dynamic EQ` when cleanup or resonance control is needed.
 5. **Check the analyzer overlay**. Use the `Original` and `Processed` spectrum curves to verify what changed instead of judging only by output loudness.
-6. **Refine manually**. Treat the assistant as a starting point, then fine-tune EQ, compression, stereo width, gain staging, and maximizer settings for the final result.
+6. **Refine manually**. Treat the assistant as a starting point, then fine-tune EQ, compression, stereo width, gain staging, the maximizer mode, and final loudness settings.
 7. **Level-match your decisions**. Louder often sounds better at first; compare with care when deciding whether processing is actually improving the mix.
 
 ### Reference Match
@@ -196,7 +203,7 @@
 - **Multiband Comp**: Use it for glue and control, not constant pumping. Small moves usually work better than extreme thresholds.
 - **Stereo Imager**: Widen upper bands carefully. Keep low frequencies conservative if you want safer mono translation.
 - **Gain**: Use this stage to manage level into the maximizer and keep the overall chain under control.
-- **Maximizer**: Use it as the final loudness stage. Raise loudness logically, but leave enough headroom to avoid turning the master brittle.
+- **Maximizer**: Use it as the final loudness stage. `Transparent` is the most neutral starting point, `Loud` is for denser modern masters, and `Safe` is the conservative choice when the mix is already hot or spiky.
 
 ## Support & Donations
 If you find oXygen useful and want to support its development, consider supporting the project:

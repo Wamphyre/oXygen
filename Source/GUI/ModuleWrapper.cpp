@@ -1,9 +1,13 @@
 #include "ModuleWrapper.h"
 #include "Theme.h"
+#include "../Modules/MaximizerModule.h"
 
 namespace oxygen
 {
-    ModuleWrapper::ModuleWrapper(const juce::String& name, std::unique_ptr<juce::AudioProcessorEditor> editor, juce::RangedAudioParameter* bypassParam)
+    ModuleWrapper::ModuleWrapper(const juce::String& name,
+                                 std::unique_ptr<juce::AudioProcessorEditor> editor,
+                                 juce::RangedAudioParameter* bypassParam,
+                                 juce::AudioProcessor* processor)
         : moduleName(name), moduleEditor(std::move(editor))
     {
         addAndMakeVisible(bypassButton);
@@ -34,6 +38,20 @@ namespace oxygen
         downButton.setButtonText(juce::CharPointer_UTF8("\xe2\x86\x93")); // Down arrow
         downButton.onClick = [this] { if (onMoveDown) onMoveDown(); };
 
+        if (auto* maximizerModule = dynamic_cast<oxygen::MaximizerModule*>(processor))
+        {
+            addAndMakeVisible(modeSelector);
+            modeSelector.addItem("Transparent", 1);
+            modeSelector.addItem("Loud", 2);
+            modeSelector.addItem("Safe", 3);
+            modeSelector.setJustificationType(juce::Justification::centredLeft);
+            modeSelector.setColour(juce::ComboBox::backgroundColourId, oxygen::Theme::Colors::SurfaceVariant.darker(0.15f));
+            modeSelector.setColour(juce::ComboBox::outlineColourId, oxygen::Theme::Colors::OnSurfaceVariant.withAlpha(0.28f));
+            modeSelector.setColour(juce::ComboBox::textColourId, oxygen::Theme::Colors::OnSurface);
+            modeSelector.setColour(juce::ComboBox::arrowColourId, oxygen::Theme::Colors::Primary);
+            modeAttachment = std::make_unique<ComboBoxAttachment>(maximizerModule->apvts, "Mode", modeSelector);
+        }
+
         if (moduleEditor != nullptr)
         {
             addAndMakeVisible(moduleEditor.get());
@@ -63,36 +81,44 @@ namespace oxygen
 
     void ModuleWrapper::paint(juce::Graphics& g)
     {
-        auto bounds = getLocalBounds().toFloat();
-        auto currentHeaderHeight = (float)headerHeight; // Use member variable headerHeight
-        
-        // Background    // Material Design 3 Styling
-    g.setColour(oxygen::Theme::Colors::SurfaceVariant);
-    g.fillRoundedRectangle(getLocalBounds().toFloat(), oxygen::Theme::Dimens::CornerRadius);
-    
-    // Header background (optional, or just use the surface variant)
-    // g.setColour(oxygen::Theme::Colors::SurfaceVariant.brighter(0.05f));
-    // g.fillRoundedRectangle(0, 0, getWidth(), 30, oxygen::Theme::Dimens::CornerRadius); // Top rounded only?
+        g.setColour(oxygen::Theme::Colors::SurfaceVariant);
+        g.fillRoundedRectangle(getLocalBounds().toFloat(), oxygen::Theme::Dimens::CornerRadius);
 
-    g.setColour(oxygen::Theme::Colors::OnSurface);
-    g.setFont(oxygen::Theme::Fonts::getSubheading());
-    g.drawText(moduleName, 15, 5, getWidth() - 40, 20, juce::Justification::centredLeft, true);
-    
-    // Outline (Subtle)
-    g.setColour(oxygen::Theme::Colors::OnSurfaceVariant.withAlpha(0.1f));
-    g.drawRoundedRectangle(getLocalBounds().toFloat(), oxygen::Theme::Dimens::CornerRadius, 1.0f); // Draw border around the whole component
-        
+        constexpr int headerButtonWidth = 40;
+        constexpr int headerModeWidth = 148;
+        const int rightControlsWidth = headerButtonWidth * 4
+                                     + (modeAttachment != nullptr ? headerModeWidth + 8 : 0);
+
+        g.setColour(oxygen::Theme::Colors::OnSurface);
+        g.setFont(oxygen::Theme::Fonts::getSubheading());
+        g.drawText(moduleName,
+                   15,
+                   5,
+                   juce::jmax(80, getWidth() - rightControlsWidth - 28),
+                   20,
+                   juce::Justification::centredLeft,
+                   true);
+
+        g.setColour(oxygen::Theme::Colors::OnSurfaceVariant.withAlpha(0.1f));
+        g.drawRoundedRectangle(getLocalBounds().toFloat(), oxygen::Theme::Dimens::CornerRadius, 1.0f);
     }
 
     void ModuleWrapper::resized()
     {
         auto bounds = getLocalBounds();
         auto headerArea = bounds.removeFromTop(headerHeight);
-        
+
         collapseButton.setBounds(headerArea.removeFromRight(40).reduced(5));
         downButton.setBounds(headerArea.removeFromRight(40).reduced(5));
         upButton.setBounds(headerArea.removeFromRight(40).reduced(5));
         bypassButton.setBounds(headerArea.removeFromRight(40).reduced(5));
+
+        if (modeAttachment != nullptr)
+        {
+            auto modeArea = headerArea.removeFromRight(148).reduced(4, 4);
+            modeSelector.setBounds(modeArea);
+            headerArea.removeFromRight(4);
+        }
         
         if (moduleEditor != nullptr && !collapsed)
         {

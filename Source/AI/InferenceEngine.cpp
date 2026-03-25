@@ -23,6 +23,9 @@ namespace oxygen
             10000.0f, 15000.0f, 20000.0f
         };
         constexpr std::array<int, dynamicEqBandCount> dynamicEqMacroBands { 0, 1, 2, 3 };
+        constexpr int transparentMaximizerMode = 0;
+        constexpr int loudMaximizerMode = 1;
+        constexpr int safeMaximizerMode = 2;
 
         struct AnalysisFeatures
         {
@@ -400,18 +403,24 @@ namespace oxygen
             const float positiveEqBoostDb = computeWeightedPositiveEqBoostDb(params.eqBandGains);
             const float compressionDensity = computeCompressionDensityScore(params);
             const float widthLift = (juce::jmax(0.0f, params.lowMidWidth - 1.04f) * 0.24f)
-                                  + (juce::jmax(0.0f, params.highMidWidth - 1.16f) * 0.56f)
-                                  + (juce::jmax(0.0f, params.highWidth - 1.28f) * 0.72f);
+                                  + (juce::jmax(0.0f, params.highMidWidth - 1.10f) * 0.62f)
+                                  + (juce::jmax(0.0f, params.highWidth - 1.18f) * 0.86f);
             const float limiterDriveDb = juce::jmax(0.0f, -params.maximizerThreshold);
+            const float hybridLimiterReliefDb = juce::jlimit(0.0f, 1.35f,
+                                                             (juce::jmax(0.0f, limiterDriveDb - 2.4f) * 0.10f)
+                                                           + (juce::jmax(0.0f, params.maximizerRelease - 100.0f) * 0.004f)
+                                                           + (juce::jmax(0.0f, -params.maximizerCeiling - 0.55f) * 0.35f));
 
             const float predictedExcitationDb = (positiveEqBoostDb * 0.88f)
                                               + (juce::jmax(0.0f, outputTrimDb) * 1.05f)
                                               + (compressionDensity * 0.60f)
                                               + widthLift
-                                              + (juce::jmax(0.0f, limiterDriveDb - 6.5f) * 0.44f);
-            const float predictedPreLimiterPeakDb = sourceFeatures.truePeakDb + (predictedExcitationDb * 0.54f);
-            const float limiterStressDb = juce::jmax(0.0f, predictedPreLimiterPeakDb - (params.maximizerCeiling + 0.35f))
-                                        + (juce::jmax(0.0f, limiterDriveDb - 8.8f) * 0.62f);
+                                              + (juce::jmax(0.0f, limiterDriveDb - 7.2f) * 0.34f)
+                                              - (hybridLimiterReliefDb * 0.36f);
+            const float predictedPreLimiterPeakDb = sourceFeatures.truePeakDb + (predictedExcitationDb * 0.50f);
+            const float limiterStressDb = juce::jmax(0.0f, predictedPreLimiterPeakDb - (params.maximizerCeiling + 0.24f))
+                                        + (juce::jmax(0.0f, limiterDriveDb - 8.6f) * 0.48f)
+                                        - (hybridLimiterReliefDb * 0.62f);
 
             const float predictedProgramLoudnessDb = sourceProgramLoudnessDb
                                                    + (juce::jmax(0.0f, targetProgramLoudnessDb - sourceProgramLoudnessDb) * 0.94f)
@@ -420,12 +429,12 @@ namespace oxygen
             const float loudnessOvershootDb = juce::jmax(0.0f, predictedProgramLoudnessDb - (targetProgramLoudnessDb + 0.55f));
             const float boostStressDb = juce::jmax(0.0f, positiveEqBoostDb - 4.8f) * 0.46f;
 
-            return limiterStressDb + (loudnessOvershootDb * 0.82f) + boostStressDb;
+            return juce::jmax(0.0f, limiterStressDb + (loudnessOvershootDb * 0.82f) + boostStressDb);
         }
 
         void softenReferenceParametersForSafety(MasteringParameters& params, float saturationRisk)
         {
-            const float softenAmount = juce::jlimit(0.0f, 0.46f, saturationRisk / 6.5f);
+            const float softenAmount = juce::jlimit(0.0f, 0.42f, saturationRisk / 6.5f);
             if (softenAmount <= 0.0f)
                 return;
 
@@ -455,16 +464,16 @@ namespace oxygen
 
             params.lowWidth = juce::jmin(params.lowWidth, 0.18f - (0.05f * softenAmount));
             params.lowMidWidth = pullTowards(params.lowMidWidth, 1.04f, 0.30f * softenAmount);
-            params.highMidWidth = pullTowards(params.highMidWidth, 1.10f, 0.36f * softenAmount);
-            params.highWidth = pullTowards(params.highWidth, 1.16f, 0.40f * softenAmount);
+            params.highMidWidth = pullTowards(params.highMidWidth, 1.08f, 0.38f * softenAmount);
+            params.highWidth = pullTowards(params.highWidth, 1.12f, 0.42f * softenAmount);
 
             float outputTrimDb = juce::Decibels::gainToDecibels(juce::jmax(params.outputGain, 1.0e-4f));
-            outputTrimDb -= 1.6f * softenAmount;
+            outputTrimDb -= 1.4f * softenAmount;
             params.outputGain = juce::Decibels::decibelsToGain(outputTrimDb);
 
-            params.maximizerThreshold = juce::jmin(-0.6f, params.maximizerThreshold + (2.2f * softenAmount));
-            params.maximizerCeiling = juce::jmin(params.maximizerCeiling, -0.55f - (0.18f * softenAmount));
-            params.maximizerRelease = juce::jmin(180.0f, params.maximizerRelease + (18.0f * softenAmount));
+            params.maximizerThreshold = juce::jmin(-0.6f, params.maximizerThreshold + (1.8f * softenAmount));
+            params.maximizerCeiling = juce::jmin(params.maximizerCeiling, -0.50f - (0.16f * softenAmount));
+            params.maximizerRelease = juce::jmin(180.0f, params.maximizerRelease + (14.0f * softenAmount));
 
             juce::Logger::writeToLog("Reference safety softening applied: risk="
                                      + juce::String(saturationRisk, 2)
@@ -1192,6 +1201,158 @@ namespace oxygen
             return juce::jmax(0.0f, value - threshold);
         }
 
+        int pickMaximizerMode(float transparentScore, float loudScore, float safeScore)
+        {
+            int mode = transparentMaximizerMode;
+            float bestScore = transparentScore;
+
+            if (loudScore > bestScore)
+            {
+                mode = loudMaximizerMode;
+                bestScore = loudScore;
+            }
+
+            if (safeScore > bestScore)
+                mode = safeMaximizerMode;
+
+            return mode;
+        }
+
+        int chooseAssistantMaximizerMode(const AnalysisFeatures& features,
+                                         const AssistantContext& context,
+                                         float targetProgramLoudnessDb,
+                                         float loudnessProxyDb,
+                                         float maximizerDriveDb,
+                                         float maximizerReleaseMs,
+                                         bool hotProgram,
+                                         bool overCompressedProgram,
+                                         float dynamicPotential,
+                                         float headroomPotential,
+                                         float problemPotential)
+        {
+            float transparentScore = 0.35f;
+            float loudScore = 0.10f;
+            float safeScore = 0.12f;
+
+            const float loudnessGapDb = targetProgramLoudnessDb - loudnessProxyDb;
+
+            loudScore += positiveEvidence(loudnessGapDb, 1.2f) * 0.46f;
+            loudScore += headroomPotential * 0.65f;
+            loudScore += positiveEvidence(maximizerDriveDb, 4.0f) * 0.24f;
+            loudScore += juce::jmax(0.0f, 10.8f - features.crestDb) * 0.18f;
+            loudScore += juce::jmax(0.0f, 2.2f - features.transientMotionDb) * 0.20f;
+
+            transparentScore += juce::jmax(0.0f, features.crestDb - 8.8f) * 0.10f;
+            transparentScore += juce::jmax(0.0f, features.transientMotionDb - 1.9f) * 0.16f;
+            transparentScore += dynamicPotential * 0.25f;
+            transparentScore += positiveEvidence(maximizerReleaseMs, 126.0f) * 0.008f;
+            transparentScore -= juce::jmax(0.0f, 9.8f - features.crestDb) * 0.10f;
+
+            safeScore += hotProgram ? 0.75f : 0.0f;
+            safeScore += overCompressedProgram ? 0.90f : 0.0f;
+            safeScore += juce::jmax(0.0f, features.truePeakDb + 0.45f) * 0.90f;
+            safeScore += juce::jmax(0.0f, features.crestDb - 12.2f) * 0.18f;
+            safeScore += juce::jmax(0.0f, features.transientMotionDb - 2.6f) * 0.28f;
+            safeScore += problemPotential * 0.24f;
+            safeScore += juce::jmax(0.0f, features.sideRatio - 0.64f) * 0.55f;
+            safeScore += positiveEvidence(maximizerReleaseMs, 138.0f) * 0.014f;
+
+            switch (context.direction)
+            {
+                case ArtisticDirection::Transparent:
+                    transparentScore += 0.95f;
+                    loudScore -= 0.45f;
+                    break;
+
+                case ArtisticDirection::Balanced:
+                    transparentScore += 0.35f;
+                    break;
+
+                case ArtisticDirection::Warm:
+                    transparentScore += 0.20f;
+                    safeScore += 0.10f;
+                    break;
+
+                case ArtisticDirection::Punchy:
+                    loudScore += 0.45f;
+                    break;
+
+                case ArtisticDirection::Aggressive:
+                    loudScore += 0.85f;
+                    transparentScore -= 0.18f;
+                    break;
+
+                case ArtisticDirection::Wide:
+                    safeScore += 0.12f;
+                    break;
+            }
+
+            if (hotProgram)
+            {
+                loudScore -= 0.35f;
+                transparentScore -= 0.15f;
+            }
+
+            if (overCompressedProgram)
+            {
+                loudScore -= 0.80f;
+                transparentScore -= 0.35f;
+            }
+
+            if (features.truePeakDb > -0.35f)
+                loudScore -= 0.45f;
+
+            if (problemPotential > 0.55f)
+                loudScore -= (problemPotential - 0.55f) * 0.45f;
+
+            return pickMaximizerMode(transparentScore, loudScore, safeScore);
+        }
+
+        int chooseReferenceMaximizerMode(const AnalysisFeatures& sourceFeatures,
+                                         const AnalysisFeatures& referenceFeatures,
+                                         const ReferenceMatchProfile& referenceMatch,
+                                         float saturationRisk,
+                                         float sourceProgramLoudnessDb,
+                                         float referenceProgramLoudnessDb,
+                                         float maximizerDriveDb,
+                                         float maximizerReleaseMs)
+        {
+            float transparentScore = 0.40f;
+            float loudScore = 0.10f;
+            float safeScore = 0.12f;
+
+            const float loudnessGapDb = referenceProgramLoudnessDb - sourceProgramLoudnessDb;
+
+            loudScore += positiveEvidence(referenceProgramLoudnessDb, -10.4f) * 0.55f;
+            loudScore += positiveEvidence(loudnessGapDb, 0.75f) * 0.28f;
+            loudScore += positiveEvidence(maximizerDriveDb, 4.0f) * 0.24f;
+            loudScore += juce::jmax(0.0f, 10.2f - referenceFeatures.crestDb) * 0.18f;
+            loudScore += juce::jmax(0.0f, 2.0f - referenceFeatures.transientMotionDb) * 0.22f;
+            loudScore += referenceMatch.loudnessWeight * 0.32f;
+            loudScore -= juce::jmax(0.0f, saturationRisk - 0.40f) * 0.35f;
+            loudScore -= juce::jmax(0.0f, referenceFeatures.truePeakDb + 0.35f) * 0.55f;
+
+            transparentScore += juce::jmax(0.0f, referenceFeatures.crestDb - 8.8f) * 0.10f;
+            transparentScore += juce::jmax(0.0f, referenceFeatures.transientMotionDb - 1.9f) * 0.18f;
+            transparentScore += juce::jmax(0.0f, -referenceProgramLoudnessDb - 11.2f) * 0.15f;
+            transparentScore += positiveEvidence(maximizerReleaseMs, 126.0f) * 0.008f;
+            if (referenceMatch.overallConfidence < 0.25f)
+                transparentScore += 0.25f;
+
+            safeScore += juce::jmax(0.0f, saturationRisk - 0.25f) * 0.95f;
+            safeScore += juce::jmax(0.0f, sourceFeatures.truePeakDb + 0.40f) * 0.70f;
+            safeScore += juce::jmax(0.0f, referenceFeatures.crestDb - 12.0f) * 0.22f;
+            safeScore += juce::jmax(0.0f, referenceFeatures.transientMotionDb - 2.5f) * 0.30f;
+            safeScore += juce::jmax(0.0f, referenceFeatures.sideRatio - 0.68f) * 0.55f;
+            safeScore += positiveEvidence(maximizerReleaseMs, 138.0f) * 0.014f;
+            if (referenceMatch.lowEndSafety < 0.28f)
+                safeScore += 0.35f;
+            if (referenceMatch.overallConfidence < 0.18f)
+                safeScore += 0.18f;
+
+            return pickMaximizerMode(transparentScore, loudScore, safeScore);
+        }
+
         float computeLoudnessProxyDb(const AnalysisFeatures& features)
         {
             const float programLoudness = (features.integratedLufs > -99.0f)
@@ -1642,48 +1803,48 @@ namespace oxygen
 
         const float widthBias = (genreTuning.widthBias + directionTuning.widthBias) * (hotProgram ? 0.45f : 1.0f);
 
-        params.lowWidth = juce::jlimit(0.0f, 0.25f, 0.16f - (features.bandSideRatio[0] * 0.18f));
-        params.lowMidWidth = (features.bandCorrelation[1] > 0.90f && features.bandSideRatio[1] < 0.12f) ? 1.04f
-                          : (features.bandCorrelation[1] < 0.45f || features.bandSideRatio[1] > 0.45f) ? 0.96f
-                          : 1.00f;
-        params.lowMidWidth += 0.04f * widthBias;
+        params.lowWidth = juce::jlimit(0.0f, 0.22f, 0.14f - (features.bandSideRatio[0] * 0.16f));
+        params.lowMidWidth = (features.bandCorrelation[1] > 0.90f && features.bandSideRatio[1] < 0.12f) ? 1.02f
+                          : (features.bandCorrelation[1] < 0.45f || features.bandSideRatio[1] > 0.45f) ? 0.97f
+                          : 0.99f;
+        params.lowMidWidth += 0.03f * widthBias;
 
         if (features.bandCorrelation[2] > 0.88f && features.bandSideRatio[2] < 0.18f)
-            params.highMidWidth = 1.16f;
+            params.highMidWidth = 1.10f;
         else if (features.bandCorrelation[2] < 0.25f || features.bandSideRatio[2] > 0.70f)
             params.highMidWidth = 1.00f;
         else
-            params.highMidWidth = 1.08f;
-        params.highMidWidth += 0.10f * widthBias;
+            params.highMidWidth = 1.05f;
+        params.highMidWidth += 0.07f * widthBias;
 
         if (features.bandCorrelation[3] > 0.86f && features.bandSideRatio[3] < 0.18f)
-            params.highWidth = 1.28f;
+            params.highWidth = 1.18f;
         else if (features.bandCorrelation[3] < 0.20f || features.bandSideRatio[3] > 0.75f)
-            params.highWidth = 1.02f;
+            params.highWidth = 1.01f;
         else
-            params.highWidth = 1.14f;
-        params.highWidth += 0.14f * widthBias;
+            params.highWidth = 1.10f;
+        params.highWidth += 0.10f * widthBias;
 
         if (features.stereoCorrelation < 0.15f || features.sideRatio > 0.70f)
         {
-            params.highMidWidth = juce::jmin(params.highMidWidth, 1.08f);
-            params.highWidth = juce::jmin(params.highWidth, 1.12f);
+            params.highMidWidth = juce::jmin(params.highMidWidth, 1.06f);
+            params.highWidth = juce::jmin(params.highWidth, 1.10f);
         }
 
         if (hotProgram)
         {
-            params.lowMidWidth = juce::jmin(params.lowMidWidth, 1.04f);
-            params.highMidWidth = juce::jmin(params.highMidWidth, 1.14f);
-            params.highWidth = juce::jmin(params.highWidth, 1.22f);
+            params.lowMidWidth = juce::jmin(params.lowMidWidth, 1.02f);
+            params.highMidWidth = juce::jmin(params.highMidWidth, 1.10f);
+            params.highWidth = juce::jmin(params.highWidth, 1.16f);
         }
 
-        params.maximizerRelease = (features.crestDb > 12.0f) ? 98.0f
-                                 : (features.crestDb < 8.0f) ? 145.0f
-                                 : 118.0f;
+        params.maximizerRelease = (features.crestDb > 12.0f) ? 108.0f
+                                 : (features.crestDb < 8.0f) ? 138.0f
+                                 : 122.0f;
         params.maximizerRelease -= 10.0f * juce::jlimit(-0.30f, 0.60f, genreTuning.glueBias + directionTuning.glueBias);
 
         if (hotProgram || overCompressedProgram)
-            params.maximizerRelease = juce::jmax(params.maximizerRelease, 130.0f);
+            params.maximizerRelease = juce::jmax(params.maximizerRelease, 126.0f);
 
         if (effectiveContext.direction == ArtisticDirection::Punchy)
         {
@@ -1723,26 +1884,27 @@ namespace oxygen
                 gainDb = 0.0f;
         }
 
-        const float dynamicEqScale = juce::jlimit(0.68f, 1.36f,
+        const float dynamicEqScale = juce::jlimit(0.72f, 1.48f,
                                                   impactStrength
-                                                    * (hotProgram ? 0.90f : 1.0f)
-                                                    * (overCompressedProgram ? 0.84f : 1.0f));
+                                                    * (hotProgram ? 0.94f : 1.0f)
+                                                    * (overCompressedProgram ? 0.88f : 1.0f)
+                                                    * (0.96f + (0.20f * problemPotential)));
         const float lowResonancePersistence = maxBandRange(features.eqExcessPersistence, 2, 4);
         const float bodyResonancePersistence = maxBandRange(features.eqExcessPersistence, 5, 7);
         const float presenceResonancePersistence = maxBandRange(features.eqExcessPersistence, 9, 10);
         const float airResonancePersistence = maxBandRange(features.eqExcessPersistence, 11, 13);
 
-        const float lowDynamicRange = juce::jlimit(0.0f, 7.0f,
-            ((0.55f * lowOverhang) + (0.42f * mudEvidence) + (2.2f * lowResonancePersistence) - (0.18f * lowPunchOpportunity))
+        const float lowDynamicRange = juce::jlimit(0.0f, 7.4f,
+            ((0.55f * lowOverhang) + (0.42f * mudEvidence) + (2.35f * lowResonancePersistence) - (0.18f * lowPunchOpportunity))
                 * dynamicEqScale);
-        const float bodyDynamicRange = juce::jlimit(0.0f, 6.4f,
-            ((0.85f * mudEvidence) + (2.6f * bodyResonancePersistence) + (0.18f * lowOverhang))
+        const float bodyDynamicRange = juce::jlimit(0.0f, 6.8f,
+            ((0.88f * mudEvidence) + (2.75f * bodyResonancePersistence) + (0.18f * lowOverhang))
                 * dynamicEqScale);
-        const float presenceDynamicRange = juce::jlimit(0.0f, 7.8f,
-            ((0.78f * harshEvidence) + (2.9f * presenceResonancePersistence) + (0.22f * topOverhang))
+        const float presenceDynamicRange = juce::jlimit(0.0f, 8.0f,
+            ((0.82f * harshEvidence) + (3.05f * presenceResonancePersistence) + (0.22f * topOverhang))
                 * dynamicEqScale);
-        const float airDynamicRange = juce::jlimit(0.0f, 6.0f,
-            ((0.50f * harshEvidence) + (0.42f * topOverhang) + (2.3f * airResonancePersistence) - (0.15f * airOpportunity))
+        const float airDynamicRange = juce::jlimit(0.0f, 6.2f,
+            ((0.52f * harshEvidence) + (0.42f * topOverhang) + (2.45f * airResonancePersistence) - (0.15f * airOpportunity))
                 * dynamicEqScale);
 
         setDynamicEqBand(params, 0,
@@ -1772,51 +1934,51 @@ namespace oxygen
         const float nearCeilingBiasDb = juce::jmax(0.0f, features.truePeakDb - (genreTuning.ceilingDb - 2.2f)) * 0.25f;
         const float loudnessStressDb = juce::jmax(0.0f, loudnessProxyDb - (targetProgramLoudnessDb - 1.2f)) * 0.45f;
         const float trimScale = (hotProgram || overCompressedProgram) ? 1.0f : 0.72f;
-        const float proactiveTrimDb = juce::jlimit(0.0f, 3.2f,
-                                                   ((positiveEqBoostDb * 0.30f)
-                                                 + (widthExcursionDb * 0.45f)
+        const float proactiveTrimDb = juce::jlimit(0.0f, 2.8f,
+                                                   ((positiveEqBoostDb * 0.28f)
+                                                 + (widthExcursionDb * 0.38f)
                                                  + nearCeilingBiasDb
-                                                 + loudnessStressDb) * trimScale);
+                                                 + (loudnessStressDb * 0.40f)) * trimScale);
         params.outputGain = juce::Decibels::decibelsToGain(-proactiveTrimDb);
 
         const float loudnessGapDb = targetProgramLoudnessDb - loudnessProxyDb;
         float desiredDriveDb = loudnessGapDb
-                             + (proactiveTrimDb * 0.80f)
-                             + (glueControl * 0.55f)
-                             + (juce::jmax(0.0f, 9.0f - features.crestDb) * 0.08f);
+                             + (proactiveTrimDb * 0.72f)
+                             + (glueControl * 0.44f)
+                             + (juce::jmax(0.0f, 9.2f - features.crestDb) * 0.07f);
 
         if (loudnessGapDb < 0.5f && features.truePeakDb > (genreTuning.ceilingDb - 0.8f))
-            desiredDriveDb = juce::jmin(desiredDriveDb, 1.6f);
+            desiredDriveDb = juce::jmin(desiredDriveDb, 1.4f);
         if (hotProgram)
-            desiredDriveDb = juce::jmin(desiredDriveDb, 4.2f);
-        if (overCompressedProgram)
-            desiredDriveDb = juce::jmin(desiredDriveDb, 3.4f);
-        if (features.crestDb > 12.5f)
-            desiredDriveDb = juce::jmin(desiredDriveDb, 5.6f);
-        if (features.truePeakDb > -0.2f)
             desiredDriveDb = juce::jmin(desiredDriveDb, 3.8f);
+        if (overCompressedProgram)
+            desiredDriveDb = juce::jmin(desiredDriveDb, 3.1f);
+        if (features.crestDb > 12.5f)
+            desiredDriveDb = juce::jmin(desiredDriveDb, 5.2f);
+        if (features.truePeakDb > -0.2f)
+            desiredDriveDb = juce::jmin(desiredDriveDb, 3.4f);
         if (effectiveContext.genre == AssistantGenre::BlackMetal)
-            desiredDriveDb = juce::jmin(desiredDriveDb, 4.0f);
+            desiredDriveDb = juce::jmin(desiredDriveDb, 3.8f);
         if (effectiveContext.genre == AssistantGenre::Acoustic)
-            desiredDriveDb = juce::jmin(desiredDriveDb, 2.8f);
+            desiredDriveDb = juce::jmin(desiredDriveDb, 2.5f);
         if (effectiveContext.genre == AssistantGenre::Orchestral)
-            desiredDriveDb = juce::jmin(desiredDriveDb, 2.2f);
+            desiredDriveDb = juce::jmin(desiredDriveDb, 2.0f);
 
-        desiredDriveDb = juce::jlimit(0.6f, 11.5f, desiredDriveDb);
+        desiredDriveDb = juce::jlimit(0.6f, 10.8f, desiredDriveDb);
 
-        const float peakLimitedDriveDb = juce::jlimit(1.0f, 11.5f,
-                                                      (-features.truePeakDb + std::abs(genreTuning.ceilingDb) - 0.4f)
-                                                    + 5.5f
+        const float peakLimitedDriveDb = juce::jlimit(1.0f, 10.8f,
+                                                      (-features.truePeakDb + std::abs(genreTuning.ceilingDb) - 0.35f)
+                                                    + 4.9f
                                                     + proactiveTrimDb);
         params.maximizerThreshold = -juce::jmin(desiredDriveDb, peakLimitedDriveDb);
         params.maximizerCeiling = genreTuning.ceilingDb;
         if (hotProgram || overCompressedProgram)
             params.maximizerCeiling = juce::jmin(params.maximizerCeiling, genreTuning.ceilingDb - 0.10f);
 
-        params.lowWidth = juce::jlimit(0.0f, 0.25f, params.lowWidth);
-        params.lowMidWidth = juce::jlimit(0.80f, 1.55f, params.lowMidWidth);
-        params.highMidWidth = juce::jlimit(0.95f, 1.80f, params.highMidWidth);
-        params.highWidth = juce::jlimit(1.0f, 1.95f, params.highWidth);
+        params.lowWidth = juce::jlimit(0.0f, 0.22f, params.lowWidth);
+        params.lowMidWidth = juce::jlimit(0.85f, 1.42f, params.lowMidWidth);
+        params.highMidWidth = juce::jlimit(0.95f, 1.58f, params.highMidWidth);
+        params.highWidth = juce::jlimit(1.0f, 1.68f, params.highWidth);
         params.lowRatio = juce::jlimit(1.0f, 6.4f, params.lowRatio);
         params.lowMidRatio = juce::jlimit(1.0f, 6.0f, params.lowMidRatio);
         params.highMidRatio = juce::jlimit(1.0f, 5.2f, params.highMidRatio);
@@ -1830,6 +1992,17 @@ namespace oxygen
         params.highMidRelease = juce::jlimit(60.0f, 180.0f, params.highMidRelease);
         params.highRelease = juce::jlimit(50.0f, 160.0f, params.highRelease);
         params.maximizerRelease = juce::jlimit(60.0f, 180.0f, params.maximizerRelease);
+        params.maximizerMode = chooseAssistantMaximizerMode(features,
+                                                            effectiveContext,
+                                                            targetProgramLoudnessDb,
+                                                            loudnessProxyDb,
+                                                            -params.maximizerThreshold,
+                                                            params.maximizerRelease,
+                                                            hotProgram,
+                                                            overCompressedProgram,
+                                                            dynamicPotential,
+                                                            headroomPotential,
+                                                            problemPotential);
 
         return params;
     }
@@ -2070,7 +2243,7 @@ namespace oxygen
                                              float maxWidth,
                                              float scale)
         {
-            const float widthShift = juce::jlimit(-0.48f, 0.48f,
+            const float widthShift = juce::jlimit(-0.36f, 0.36f,
                                                   (referenceSideRatio - sourceSideRatio) * scale * referenceMatch.widthWeight);
             return juce::jlimit(minWidth, maxWidth, currentWidth + widthShift);
         };
@@ -2078,19 +2251,19 @@ namespace oxygen
         params.lowWidth = matchWidth(params.lowWidth,
                                      sourceFeatures.bandSideRatio[0],
                                      referenceFeatures.bandSideRatio[0],
-                                     0.0f, 0.25f, 0.38f);
+                                     0.0f, 0.22f, 0.30f);
         params.lowMidWidth = matchWidth(params.lowMidWidth,
                                         sourceFeatures.bandSideRatio[1],
                                         referenceFeatures.bandSideRatio[1],
-                                        0.80f, 1.55f, 0.55f);
+                                        0.85f, 1.42f, 0.42f);
         params.highMidWidth = matchWidth(params.highMidWidth,
                                          sourceFeatures.bandSideRatio[2],
                                          referenceFeatures.bandSideRatio[2],
-                                         0.95f, 1.80f, 0.78f);
+                                         0.95f, 1.58f, 0.58f);
         params.highWidth = matchWidth(params.highWidth,
                                       sourceFeatures.bandSideRatio[3],
                                       referenceFeatures.bandSideRatio[3],
-                                      1.0f, 1.95f, 0.92f);
+                                      1.0f, 1.68f, 0.68f);
 
         const float protectedLowWidthMax = juce::jlimit(0.05f, 0.22f,
                                                         0.06f
@@ -2099,12 +2272,12 @@ namespace oxygen
         params.lowWidth = juce::jmin(params.lowWidth, protectedLowWidthMax);
 
         if (referenceMatch.lowEndSafety < 0.28f)
-            params.lowMidWidth = juce::jmin(params.lowMidWidth, 1.14f);
+            params.lowMidWidth = juce::jmin(params.lowMidWidth, 1.10f);
 
         if (referenceFeatures.stereoCorrelation < 0.12f || referenceFeatures.sideRatio > 0.76f)
         {
-            params.highMidWidth = juce::jmin(params.highMidWidth, 1.18f);
-            params.highWidth = juce::jmin(params.highWidth, 1.24f);
+            params.highMidWidth = juce::jmin(params.highMidWidth, 1.12f);
+            params.highWidth = juce::jmin(params.highWidth, 1.18f);
         }
 
         const float safeReferenceProgramLoudnessDb = juce::jlimit(-16.0f, -6.8f,
@@ -2118,7 +2291,7 @@ namespace oxygen
                                                              referenceFeatures.truePeakDb - 0.10f);
 
         params.maximizerThreshold = juce::jlimit(-12.8f, -0.6f,
-                                                 params.maximizerThreshold - (loudnessDeltaDb * 1.10f));
+                                                 params.maximizerThreshold - (loudnessDeltaDb * 0.98f));
         params.maximizerCeiling = juce::jlimit(-1.1f, -0.25f,
                                                pullTowards(params.maximizerCeiling,
                                                            referenceTruePeakTargetDb,
@@ -2127,7 +2300,7 @@ namespace oxygen
                                                params.maximizerRelease
                                                  - juce::jlimit(-24.0f, 24.0f,
                                                                 (sourceFeatures.crestDb - safeReferenceCrest)
-                                                                    * 5.6f * referenceMatch.glueWeight * assertiveBlend));
+                                                                    * 5.0f * referenceMatch.glueWeight * assertiveBlend));
 
         const float overallTransientGap = juce::jlimit(-2.5f, 2.5f,
                                                        referenceFeatures.transientMotionDb
@@ -2135,21 +2308,21 @@ namespace oxygen
         if (overallTransientGap > 0.0f)
         {
             params.maximizerThreshold = juce::jlimit(-12.8f, -0.6f,
-                                                     params.maximizerThreshold + (overallTransientGap * 0.42f));
+                                                     params.maximizerThreshold + (overallTransientGap * 0.34f));
             params.maximizerRelease = juce::jlimit(60.0f, 180.0f,
-                                                   params.maximizerRelease + (overallTransientGap * 6.5f));
+                                                   params.maximizerRelease + (overallTransientGap * 5.6f));
         }
         else if (overallTransientGap < 0.0f)
         {
             const float sustainGap = -overallTransientGap;
             params.maximizerThreshold = juce::jlimit(-12.8f, -0.6f,
-                                                     params.maximizerThreshold - (sustainGap * 0.26f));
+                                                     params.maximizerThreshold - (sustainGap * 0.22f));
             params.maximizerRelease = juce::jlimit(60.0f, 180.0f,
-                                                   params.maximizerRelease - (sustainGap * 4.2f));
+                                                   params.maximizerRelease - (sustainGap * 3.6f));
         }
 
         float outputTrimDb = juce::Decibels::gainToDecibels(juce::jmax(params.outputGain, 1.0e-4f));
-        outputTrimDb = juce::jlimit(-4.0f, 2.4f, outputTrimDb + (loudnessDeltaDb * 0.30f));
+        outputTrimDb = juce::jlimit(-4.0f, 2.4f, outputTrimDb + (loudnessDeltaDb * 0.24f));
         params.outputGain = juce::Decibels::decibelsToGain(outputTrimDb);
 
         if (referenceMatch.overallConfidence < 0.22f)
@@ -2177,13 +2350,21 @@ namespace oxygen
         params.lowMidThresh = juce::jlimit(-24.0f, -6.0f, params.lowMidThresh);
         params.highMidThresh = juce::jlimit(-24.0f, -6.0f, params.highMidThresh);
         params.highThresh = juce::jlimit(-24.0f, -6.0f, params.highThresh);
-        params.lowWidth = juce::jlimit(0.0f, 0.25f, params.lowWidth);
-        params.lowMidWidth = juce::jlimit(0.80f, 1.55f, params.lowMidWidth);
-        params.highMidWidth = juce::jlimit(0.95f, 1.80f, params.highMidWidth);
-        params.highWidth = juce::jlimit(1.0f, 1.95f, params.highWidth);
+        params.lowWidth = juce::jlimit(0.0f, 0.22f, params.lowWidth);
+        params.lowMidWidth = juce::jlimit(0.85f, 1.42f, params.lowMidWidth);
+        params.highMidWidth = juce::jlimit(0.95f, 1.58f, params.highMidWidth);
+        params.highWidth = juce::jlimit(1.0f, 1.68f, params.highWidth);
         params.maximizerThreshold = juce::jlimit(-12.8f, -0.6f, params.maximizerThreshold);
         params.maximizerCeiling = juce::jlimit(-1.1f, -0.25f, params.maximizerCeiling);
         params.maximizerRelease = juce::jlimit(60.0f, 180.0f, params.maximizerRelease);
+        params.maximizerMode = chooseReferenceMaximizerMode(sourceFeatures,
+                                                            referenceFeatures,
+                                                            referenceMatch,
+                                                            saturationRisk,
+                                                            sourceProgramLoudnessDb,
+                                                            safeReferenceProgramLoudnessDb,
+                                                            -params.maximizerThreshold,
+                                                            params.maximizerRelease);
 
         return params;
     }

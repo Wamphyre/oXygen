@@ -38,26 +38,26 @@ namespace oxygen
         g.setFont(oxygen::Theme::Fonts::getBody().withHeight(12.0f));
 
         auto bounds = getLocalBounds().toFloat();
-        float width = bounds.getWidth() / 3.0f;
-        
-        auto drawLabel = [&](const juce::String& text, int index)
+        const float width = bounds.getWidth() / 3.0f;
+
+        auto drawLabel = [&](const juce::String& text)
         {
             auto area = bounds.removeFromLeft(width);
             g.drawText(text, area.removeFromBottom(20), juce::Justification::centred, false);
         };
         
-        drawLabel("Threshold", 0);
-        drawLabel("Ceiling", 1);
-        drawLabel("Release", 2);
+        drawLabel("Threshold");
+        drawLabel("Ceiling");
+        drawLabel("Release");
     }
 
     void MaximizerEditor::resized()
     {
         auto bounds = getLocalBounds();
-        bounds.removeFromBottom(25); // Labels
-        
-        int width = bounds.getWidth() / 3;
-        
+        bounds.removeFromBottom(25);
+
+        const int width = bounds.getWidth() / 3;
+
         threshSlider.setBounds(bounds.removeFromLeft(width).reduced(15, 0));
         ceilingSlider.setBounds(bounds.removeFromLeft(width).reduced(15, 0));
         releaseSlider.setBounds(bounds.reduced(15, 0));

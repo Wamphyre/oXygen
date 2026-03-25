@@ -83,6 +83,7 @@ namespace oxygen
         float maximizerThreshold = -2.0f;
         float maximizerCeiling = -1.0f;
         float maximizerRelease = 120.0f;
+        int maximizerMode = 0;
 
         bool usedAnalysis = false;
     };

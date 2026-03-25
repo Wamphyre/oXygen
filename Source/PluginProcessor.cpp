@@ -705,6 +705,7 @@ void OxygenAudioProcessor::applyMasteringParameters(const oxygen::MasteringParam
                 setParameter(maxModule->apvts, "Threshold", params.maximizerThreshold);
                 setParameter(maxModule->apvts, "Ceiling", params.maximizerCeiling);
                 setParameter(maxModule->apvts, "Release", params.maximizerRelease);
+                setParameter(maxModule->apvts, "Mode", (float) params.maximizerMode);
             }
         }
     }
