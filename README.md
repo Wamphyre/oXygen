@@ -58,6 +58,7 @@
 
 ### macOS
 - **Format**: VST3
+- **Minimum macOS Version**: Monterey (12.0)
 - **Status**: Current primary development and validation platform
 - **Build Path**: Supported directly with `build.sh` or manual CMake
 
