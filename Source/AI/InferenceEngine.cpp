@@ -1150,7 +1150,7 @@ namespace oxygen
             return ArtisticDirection::Balanced;
         }
 
-        juce::String genreToString(AssistantGenre genre)
+        const char* genreToString(AssistantGenre genre)
         {
             switch (genre)
             {
@@ -1186,7 +1186,7 @@ namespace oxygen
             return "Universal";
         }
 
-        juce::String directionToString(ArtisticDirection direction)
+        const char* directionToString(ArtisticDirection direction)
         {
             switch (direction)
             {
@@ -1563,7 +1563,7 @@ namespace oxygen
         const auto effectiveContext = resolveAssistantContext(features, context, usedAutoDetection);
         if (usedAutoDetection)
         {
-            juce::Logger::writeToLog("Master Assistant auto context: genre="
+            juce::Logger::writeToLog(juce::String("Master Assistant auto context: genre=")
                                      + genreToString(effectiveContext.genre)
                                      + ", direction=" + directionToString(effectiveContext.direction));
         }
