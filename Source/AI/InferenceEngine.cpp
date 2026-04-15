@@ -1042,17 +1042,33 @@ namespace oxygen
 
         AssistantGenre detectGenreHeuristically(const AnalysisFeatures& features)
         {
-            constexpr std::array<GenrePattern, 10> genrePatterns {{
+            constexpr std::array<GenrePattern, 26> genrePatterns {{
                 { AssistantGenre::Pop,        1.0f,  1.4f,  8.6f, -10.2f, 0.24f, 0.84f, { 0.03f, 0.11f, 0.23f, 0.36f }, { 7.2f, 6.9f, 6.8f, 6.6f } },
+                { AssistantGenre::PopModern,  1.4f,  2.2f,  7.2f,  -8.6f, 0.26f, 0.80f, { 0.04f, 0.14f, 0.28f, 0.42f }, { 6.2f, 6.0f, 5.8f, 5.5f } },
+                { AssistantGenre::PopAcoustic, 0.4f, 0.8f, 10.4f, -12.4f, 0.16f, 0.88f, { 0.02f, 0.08f, 0.16f, 0.24f }, { 9.2f, 8.8f, 8.4f, 8.0f } },
                 { AssistantGenre::HipHop,     3.2f, -0.2f,  8.0f,  -9.3f, 0.16f, 0.90f, { 0.02f, 0.07f, 0.14f, 0.21f }, { 7.8f, 7.3f, 6.9f, 6.4f } },
+                { AssistantGenre::HipHopLoFi, 1.8f, -1.5f, 10.5f, -11.0f, 0.10f, 0.92f, { 0.01f, 0.04f, 0.08f, 0.12f }, { 9.0f, 8.5f, 8.2f, 7.8f } },
+                { AssistantGenre::HipHopBoomBap, 3.8f, 0.2f, 9.2f, -8.8f, 0.14f, 0.88f, { 0.02f, 0.06f, 0.12f, 0.18f }, { 8.5f, 8.0f, 7.5f, 7.0f } },
                 { AssistantGenre::Trap,       3.8f,  0.6f,  7.3f,  -8.6f, 0.22f, 0.86f, { 0.02f, 0.08f, 0.17f, 0.24f }, { 7.4f, 7.0f, 6.5f, 6.0f } },
+                { AssistantGenre::TrapDrill,  4.2f,  1.2f,  6.8f,  -8.0f, 0.20f, 0.84f, { 0.02f, 0.08f, 0.18f, 0.26f }, { 6.8f, 6.4f, 6.0f, 5.6f } },
                 { AssistantGenre::Electronic, 2.1f,  2.2f,  7.4f,  -8.8f, 0.34f, 0.70f, { 0.03f, 0.14f, 0.34f, 0.52f }, { 7.0f, 6.6f, 6.3f, 5.9f } },
+                { AssistantGenre::ElectronicClub, 3.2f, 2.8f, 6.4f, -7.8f, 0.42f, 0.62f, { 0.04f, 0.18f, 0.42f, 0.60f }, { 6.2f, 5.8f, 5.5f, 5.2f } },
+                { AssistantGenre::ElectronicAmbient, 1.2f, 1.5f, 11.2f, -14.0f, 0.48f, 0.55f, { 0.04f, 0.16f, 0.38f, 0.56f }, { 9.8f, 9.4f, 8.8f, 8.2f } },
                 { AssistantGenre::Rock,       1.5f,  0.8f, 10.2f, -11.4f, 0.21f, 0.80f, { 0.03f, 0.10f, 0.22f, 0.30f }, { 8.6f, 8.2f, 7.9f, 7.2f } },
-                { AssistantGenre::BlackMetal, 0.9f,  2.7f, 11.2f, -10.7f, 0.19f, 0.72f, { 0.02f, 0.09f, 0.20f, 0.28f }, { 9.3f, 8.9f, 8.4f, 7.8f } },
+                { AssistantGenre::RockIndie,  1.2f,  0.4f, 11.5f, -12.5f, 0.18f, 0.84f, { 0.02f, 0.08f, 0.18f, 0.26f }, { 9.6f, 9.2f, 8.8f, 8.2f } },
+                { AssistantGenre::RockHard,   1.8f,  1.4f,  8.8f,  -9.8f, 0.24f, 0.76f, { 0.03f, 0.12f, 0.24f, 0.34f }, { 7.8f, 7.4f, 7.0f, 6.5f } },
+                { AssistantGenre::BlackMetal,        1.2f,  2.0f, 10.5f, -10.2f, 0.28f, 0.58f, { 0.03f, 0.12f, 0.26f, 0.38f }, { 8.5f, 8.0f, 7.4f, 6.8f } },
+                { AssistantGenre::BlackMetalRaw,     0.4f,  3.6f, 12.8f, -12.0f, 0.12f, 0.82f, { 0.01f, 0.05f, 0.14f, 0.22f }, { 10.8f, 10.2f, 9.6f, 8.8f } },
+                { AssistantGenre::BlackMetalExtreme, 2.2f,  1.8f,  8.8f,  -8.8f, 0.14f, 0.78f, { 0.01f, 0.04f, 0.10f, 0.18f }, { 7.0f, 6.8f, 6.4f, 5.8f } },
                 { AssistantGenre::DeathMetal, 1.8f,  2.0f,  9.3f,  -9.7f, 0.15f, 0.80f, { 0.01f, 0.06f, 0.15f, 0.22f }, { 8.7f, 8.4f, 7.9f, 7.2f } },
+                { AssistantGenre::TechDeath,  1.4f,  2.4f,  8.5f,  -9.0f, 0.16f, 0.78f, { 0.01f, 0.06f, 0.16f, 0.24f }, { 8.2f, 7.8f, 7.4f, 6.8f } },
+                { AssistantGenre::Melodeath,  1.6f,  1.8f,  9.0f,  -9.5f, 0.18f, 0.75f, { 0.02f, 0.08f, 0.18f, 0.26f }, { 8.5f, 8.0f, 7.6f, 7.0f } },
                 { AssistantGenre::BrutalDeathMetal, 2.5f, 2.4f, 7.6f, -8.5f, 0.12f, 0.85f, { 0.01f, 0.05f, 0.11f, 0.18f }, { 7.3f, 7.1f, 6.6f, 6.1f } },
                 { AssistantGenre::Acoustic,  -0.8f,  0.7f, 13.8f, -16.8f, 0.11f, 0.93f, { 0.01f, 0.05f, 0.10f, 0.16f }, { 11.4f, 10.8f, 10.0f, 9.0f } },
-                { AssistantGenre::Orchestral,-0.6f,  0.4f, 17.0f, -20.6f, 0.09f, 0.96f, { 0.01f, 0.04f, 0.09f, 0.14f }, { 14.0f, 13.5f, 12.8f, 11.7f } }
+                { AssistantGenre::AcousticSolo, -1.2f, 0.4f, 15.5f, -18.5f, 0.08f, 0.95f, { 0.01f, 0.04f, 0.08f, 0.12f }, { 12.8f, 12.0f, 11.2f, 10.0f } },
+                { AssistantGenre::Orchestral,-0.6f,  0.4f, 17.0f, -20.6f, 0.09f, 0.96f, { 0.01f, 0.04f, 0.09f, 0.14f }, { 14.0f, 13.5f, 12.8f, 11.7f } },
+                { AssistantGenre::Cinematic,  1.4f,  0.8f, 14.5f, -15.0f, 0.14f, 0.92f, { 0.02f, 0.06f, 0.14f, 0.22f }, { 12.0f, 11.5f, 10.8f, 10.0f } },
+                { AssistantGenre::Chamber,   -1.0f,  0.2f, 18.0f, -22.0f, 0.07f, 0.97f, { 0.01f, 0.03f, 0.07f, 0.12f }, { 15.0f, 14.5f, 13.8f, 12.5f } }
             }};
 
             float bestScore = 1.0e9f;
@@ -1094,25 +1110,37 @@ namespace oxygen
                                  || features.stereoCorrelation < 0.25f;
             const bool dynamicProgram = features.crestDb > 12.5f;
 
-            if (genre == AssistantGenre::Acoustic || genre == AssistantGenre::Orchestral)
+            if (genre == AssistantGenre::Acoustic || genre == AssistantGenre::AcousticSolo
+                || genre == AssistantGenre::Orchestral || genre == AssistantGenre::Chamber)
                 return hotProgram ? ArtisticDirection::Balanced : ArtisticDirection::Transparent;
 
             if (hotProgram || overCompressedProgram)
                 return ArtisticDirection::Transparent;
 
             if (genre == AssistantGenre::BlackMetal
+                || genre == AssistantGenre::BlackMetalRaw
+                || genre == AssistantGenre::BlackMetalExtreme
                 || genre == AssistantGenre::DeathMetal
-                || genre == AssistantGenre::BrutalDeathMetal)
+                || genre == AssistantGenre::TechDeath
+                || genre == AssistantGenre::Melodeath
+                || genre == AssistantGenre::BrutalDeathMetal
+                || genre == AssistantGenre::TrapDrill
+                || genre == AssistantGenre::Cinematic)
                 return ArtisticDirection::Aggressive;
 
-            if (tooBright && genre != AssistantGenre::Electronic)
+            if (tooBright && genre != AssistantGenre::Electronic && genre != AssistantGenre::ElectronicClub)
                 return ArtisticDirection::Warm;
 
             if (narrowImage && !wideImage)
                 return ArtisticDirection::Wide;
 
+            if (genre == AssistantGenre::ElectronicAmbient)
+                return ArtisticDirection::Wide;
+
             if (dynamicProgram && (genre == AssistantGenre::Rock
+                                || genre == AssistantGenre::RockHard
                                 || genre == AssistantGenre::HipHop
+                                || genre == AssistantGenre::HipHopBoomBap
                                 || genre == AssistantGenre::Trap))
                 return ArtisticDirection::Punchy;
 
@@ -1128,15 +1156,31 @@ namespace oxygen
             {
                 case AssistantGenre::Universal: return "Universal";
                 case AssistantGenre::Pop: return "Pop";
+                case AssistantGenre::PopModern: return "PopModern";
+                case AssistantGenre::PopAcoustic: return "PopAcoustic";
                 case AssistantGenre::HipHop: return "HipHop";
+                case AssistantGenre::HipHopLoFi: return "HipHopLoFi";
+                case AssistantGenre::HipHopBoomBap: return "HipHopBoomBap";
                 case AssistantGenre::Trap: return "Trap";
+                case AssistantGenre::TrapDrill: return "TrapDrill";
                 case AssistantGenre::Electronic: return "Electronic";
+                case AssistantGenre::ElectronicClub: return "ElectronicClub";
+                case AssistantGenre::ElectronicAmbient: return "ElectronicAmbient";
                 case AssistantGenre::Rock: return "Rock";
+                case AssistantGenre::RockIndie: return "RockIndie";
+                case AssistantGenre::RockHard: return "RockHard";
                 case AssistantGenre::BlackMetal: return "BlackMetal";
+                case AssistantGenre::BlackMetalRaw: return "BlackMetalRaw";
+                case AssistantGenre::BlackMetalExtreme: return "BlackMetalExtreme";
                 case AssistantGenre::DeathMetal: return "DeathMetal";
+                case AssistantGenre::TechDeath: return "TechDeath";
+                case AssistantGenre::Melodeath: return "Melodeath";
                 case AssistantGenre::BrutalDeathMetal: return "BrutalDeathMetal";
                 case AssistantGenre::Acoustic: return "Acoustic";
+                case AssistantGenre::AcousticSolo: return "AcousticSolo";
                 case AssistantGenre::Orchestral: return "Orchestral";
+                case AssistantGenre::Cinematic: return "Cinematic";
+                case AssistantGenre::Chamber: return "Chamber";
             }
 
             return "Universal";
@@ -1370,24 +1414,56 @@ namespace oxygen
             {
                 case AssistantGenre::Pop:
                     return { -9.0f, 0.10f, 0.18f, 0.24f, 0.12f, 0.12f, 1.05f, 1.05f, 0.00f, -0.65f };
+                case AssistantGenre::PopModern:
+                    return { -8.0f, 0.14f, 0.22f, 0.28f, 0.15f, 0.16f, 0.95f, 1.00f, 0.02f, -0.55f };
+                case AssistantGenre::PopAcoustic:
+                    return { -10.5f, 0.05f, 0.12f, 0.18f, 0.08f, 0.04f, 1.15f, 1.08f, 0.10f, -0.85f };
                 case AssistantGenre::HipHop:
                     return { -8.8f, 0.36f, 0.05f, -0.06f, -0.08f, 0.18f, 1.00f, 1.15f, 0.08f, -0.80f };
+                case AssistantGenre::HipHopLoFi:
+                    return { -10.0f, 0.22f, -0.05f, -0.15f, -0.10f, 0.14f, 1.10f, 1.25f, 0.12f, -0.90f };
+                case AssistantGenre::HipHopBoomBap:
+                    return { -8.5f, 0.42f, 0.08f, -0.04f, -0.05f, 0.22f, 0.95f, 1.10f, 0.15f, -0.75f };
                 case AssistantGenre::Trap:
                     return { -8.2f, 0.46f, 0.10f, 0.08f, 0.00f, 0.24f, 1.00f, 1.12f, 0.05f, -0.75f };
+                case AssistantGenre::TrapDrill:
+                    return { -7.8f, 0.55f, 0.15f, 0.12f, 0.02f, 0.28f, 0.92f, 1.08f, 0.02f, -0.60f };
                 case AssistantGenre::Electronic:
                     return { -8.4f, 0.14f, 0.12f, 0.30f, 0.22f, 0.18f, 1.08f, 1.14f, -0.05f, -0.65f };
+                case AssistantGenre::ElectronicClub:
+                    return { -7.6f, 0.22f, 0.16f, 0.35f, 0.28f, 0.24f, 1.02f, 1.08f, -0.08f, -0.50f };
+                case AssistantGenre::ElectronicAmbient:
+                    return { -11.0f, 0.10f, 0.08f, 0.22f, 0.35f, 0.05f, 1.15f, 1.12f, 0.05f, -0.85f };
                 case AssistantGenre::Rock:
                     return { -9.6f, 0.12f, 0.24f, 0.04f, -0.04f, 0.24f, 0.98f, 1.05f, 0.14f, -0.80f };
+                case AssistantGenre::RockIndie:
+                    return { -10.2f, 0.08f, 0.20f, 0.06f, -0.02f, 0.15f, 1.05f, 1.10f, 0.18f, -0.85f };
+                case AssistantGenre::RockHard:
+                    return { -8.8f, 0.18f, 0.28f, 0.02f, -0.06f, 0.30f, 0.92f, 1.00f, 0.12f, -0.75f };
                 case AssistantGenre::BlackMetal:
                     return { -10.1f, 0.06f, 0.10f, 0.00f, -0.08f, 0.14f, 0.95f, 1.28f, 0.26f, -0.90f };
+                case AssistantGenre::BlackMetalRaw:
+                    return { -12.0f, 0.02f, 0.04f, 0.06f, -0.12f, 0.06f, 0.85f, 1.45f, 0.38f, -1.10f };
+                case AssistantGenre::BlackMetalExtreme:
+                    return { -8.5f,  0.14f, 0.16f, -0.08f, -0.14f, 0.28f, 0.82f, 1.32f, 0.14f, -0.75f };
                 case AssistantGenre::DeathMetal:
                     return { -8.9f, 0.18f, 0.20f, -0.04f, -0.10f, 0.30f, 0.92f, 1.16f, 0.18f, -0.82f };
+                case AssistantGenre::TechDeath:
+                    return { -8.4f, 0.15f, 0.24f, -0.02f, -0.08f, 0.32f, 0.95f, 1.10f, 0.20f, -0.70f };
+                case AssistantGenre::Melodeath:
+                    return { -9.2f, 0.14f, 0.26f, 0.08f, -0.04f, 0.25f, 1.02f, 1.12f, 0.15f, -0.78f };
                 case AssistantGenre::BrutalDeathMetal:
                     return { -8.4f, 0.25f, 0.18f, -0.10f, -0.16f, 0.38f, 0.88f, 1.22f, 0.10f, -0.85f };
                 case AssistantGenre::Acoustic:
                     return { -13.2f, 0.00f, 0.10f, 0.14f, 0.04f, -0.25f, 1.20f, 0.95f, 0.40f, -1.00f };
+                case AssistantGenre::AcousticSolo:
+                    return { -14.5f, 0.00f, 0.12f, 0.16f, 0.08f, -0.35f, 1.25f, 0.90f, 0.50f, -1.25f };
                 case AssistantGenre::Orchestral:
                     return { -17.0f, 0.00f, 0.06f, 0.10f, 0.02f, -0.40f, 1.25f, 1.00f, 0.65f, -1.30f };
+                case AssistantGenre::Cinematic:
+                    return { -15.0f, 0.15f, 0.08f, 0.12f, 0.10f, -0.15f, 1.10f, 1.05f, 0.30f, -0.85f };
+                case AssistantGenre::Chamber:
+                    return { -18.5f, 0.00f, 0.04f, 0.10f, 0.00f, -0.50f, 1.30f, 0.90f, 0.80f, -1.50f };
                 case AssistantGenre::Universal:
                     break;
             }
@@ -1957,11 +2033,21 @@ namespace oxygen
             desiredDriveDb = juce::jmin(desiredDriveDb, 5.2f);
         if (features.truePeakDb > -0.2f)
             desiredDriveDb = juce::jmin(desiredDriveDb, 3.4f);
-        if (effectiveContext.genre == AssistantGenre::BlackMetal)
+        if (effectiveContext.genre == AssistantGenre::BlackMetal
+            || effectiveContext.genre == AssistantGenre::BlackMetalRaw
+            || effectiveContext.genre == AssistantGenre::BlackMetalExtreme
+            || effectiveContext.genre == AssistantGenre::DeathMetal
+            || effectiveContext.genre == AssistantGenre::TechDeath
+            || effectiveContext.genre == AssistantGenre::Melodeath
+            || effectiveContext.genre == AssistantGenre::BrutalDeathMetal
+            || effectiveContext.genre == AssistantGenre::TrapDrill)
             desiredDriveDb = juce::jmin(desiredDriveDb, 3.8f);
-        if (effectiveContext.genre == AssistantGenre::Acoustic)
+        if (effectiveContext.genre == AssistantGenre::Acoustic
+            || effectiveContext.genre == AssistantGenre::AcousticSolo
+            || effectiveContext.genre == AssistantGenre::Chamber)
             desiredDriveDb = juce::jmin(desiredDriveDb, 2.5f);
-        if (effectiveContext.genre == AssistantGenre::Orchestral)
+        if (effectiveContext.genre == AssistantGenre::Orchestral
+            || effectiveContext.genre == AssistantGenre::Cinematic)
             desiredDriveDb = juce::jmin(desiredDriveDb, 2.0f);
 
         desiredDriveDb = juce::jlimit(0.6f, 10.8f, desiredDriveDb);

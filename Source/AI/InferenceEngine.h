@@ -14,15 +14,31 @@ namespace oxygen
     {
         Universal = 0,
         Pop,
+        PopModern,
+        PopAcoustic,
         HipHop,
+        HipHopLoFi,
+        HipHopBoomBap,
         Trap,
+        TrapDrill,
         Electronic,
+        ElectronicClub,
+        ElectronicAmbient,
         Rock,
+        RockIndie,
+        RockHard,
         BlackMetal,
+        BlackMetalRaw,
+        BlackMetalExtreme,
         DeathMetal,
+        TechDeath,
+        Melodeath,
         BrutalDeathMetal,
         Acoustic,
-        Orchestral
+        AcousticSolo,
+        Orchestral,
+        Cinematic,
+        Chamber
     };
 
     enum class ArtisticDirection
