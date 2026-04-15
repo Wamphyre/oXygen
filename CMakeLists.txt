@@ -1,7 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
+if(APPLE)
+    if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS deployment target (Monterey)" FORCE)
+    endif()
+endif()
 
 project(oXygen VERSION 1.0.3)
-
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(OXYGEN_ENABLE_NATIVE_OPTIMIZATIONS "Enable CPU-specific optimizations for local builds" OFF)
