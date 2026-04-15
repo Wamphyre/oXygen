@@ -2,7 +2,7 @@
 
 **oXygen** is a free and open-source mastering plugin built with C++ and JUCE. The project is focused on a practical mastering workflow: corrective EQ, dynamic resonance control, multiband control, stereo shaping, final loudness, an automatic Master Assistant that listens to the incoming mix and writes settings into the modules, and a Reference Match workflow that learns from an external reference file and adapts the rack toward that target.
 
-![Version](https://img.shields.io/badge/version-1.0.3-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)
 ![Format](https://img.shields.io/badge/format-VST3-blue)
 ![Codebase](https://img.shields.io/badge/codebase-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 ![Validation](https://img.shields.io/badge/validation-macOS%20active%20%7C%20Windows%20active%20%7C%20Linux%20active-green)

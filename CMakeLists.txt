@@ -5,7 +5,7 @@ if(APPLE)
     endif()
 endif()
 
-project(oXygen VERSION 1.0.3)
+project(oXygen VERSION 1.0.4)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(OXYGEN_ENABLE_NATIVE_OPTIMIZATIONS "Enable CPU-specific optimizations for local builds" OFF)
